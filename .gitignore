@@ -5,3 +5,7 @@
 hspice_db/
 
 .vscode/
+
+.claudeignore
+
+CLAUDE.md
