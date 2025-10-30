@@ -99,18 +99,37 @@ streamlit run app.py
 应用启动后，浏览器将自动打开一个本地网址，你就可以开始使用了。
 
 ## 📁 项目结构
+
 ```
 RAG4Spice/
-├── .venv/                # Python虚拟环境
-├── hspice_db/            # 生成的向量数据库
-├── resource/             # 存放用于构建知识库的源文件 (如.pdf)
-├── .env                  # 存储你的API密钥和配置 (私密)
-├── .env.example          # .env文件的模板
-├── .gitignore            # Git忽略文件配置
-├── app.py                # Streamlit应用主程序
-├── build_database.py     # 构建向量数据库的脚本
-└── requirements.txt      # 项目依赖
+├── src/                    # 源代码目录
+│   ├── config/             # 配置管理模块
+│   │   └── settings.py     # 统一配置管理
+│   ├── core/               # 核心业务逻辑
+│   │   ├── database.py     # 向量数据库管理
+│   │   ├── llm.py         # LLM交互
+│   │   └── retrieval.py   # 检索逻辑
+│   ├── utils/              # 工具函数模块
+│   │   ├── ocr.py         # OCR处理
+│   │   ├── pdf_parser.py  # PDF解析
+│   │   ├── text_processing.py # 文本处理
+│   │   └── validators.py  # 数据验证
+│   ├── ui/                 # 用户界面模块
+│   │   ├── components.py   # UI组件
+│   │   └── pages.py       # 页面逻辑
+│   └── models/             # 数据模型
+│       └── task_models.py   # 任务数据模型
+├── hspice_db/             # 生成的向量数据库
+├── resource/              # 存放用于构建知识库的源文件 (如.pdf)
+├── .env                   # 存储你的API密钥和配置 (私密)
+├── .env.example           # .env文件的模板
+├── .gitignore             # Git忽略文件配置
+├── app.py                 # Streamlit应用主程序 (重构后)
+├── build_database.py      # 构建向量数据库的脚本 (重构后)
+├── requirements.txt        # 项目依赖 (清理后)
+└── README.md             # 项目文档
 ```
+
 
 ## 🔮 未来计划
 这是一个基础版本，未来计划进行以下改进：

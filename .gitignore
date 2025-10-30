@@ -9,3 +9,7 @@ hspice_db/
 .claudeignore
 
 CLAUDE.md
+
+__pycache__/
+
+/__pycache__/
