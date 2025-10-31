@@ -18,6 +18,7 @@ from anthropic import Anthropic
 
 from config.models import AIModel, ModelProvider, model_config
 from config.settings import settings
+from config.custom_api import custom_api_manager, CustomAPIConfig
 from utils.text_processing import extract_json_from_text, safe_error_message, normalize_line_endings
 
 
@@ -361,6 +362,59 @@ class CohereLLMClient(BaseLLMClient):
         return ""
 
 
+class CustomAPILLMClient(BaseLLMClient):
+    """自定义API客户端"""
+
+    def __init__(self, custom_config: CustomAPIConfig, model_id: str, api_key: str):
+        # 创建一个临时的AIModel对象用于兼容
+        temp_model = AIModel(
+            provider=ModelProvider.OPENAI,  # 使用OpenAI格式
+            model_id=model_id,
+            display_name=f"{custom_config.provider_name}: {model_id}",
+            api_key_env="",  # 不使用环境变量
+            base_url=custom_config.base_url,
+            max_tokens=4096,
+            temperature=0.7,
+            supports_streaming=True,
+            is_chinese=False,
+            description=f"自定义API: {custom_config.description}"
+        )
+        super().__init__(temp_model, api_key)
+        self.custom_config = custom_config
+
+    def generate_content(self, prompt: str, **kwargs) -> Any:
+        """生成内容"""
+        # 使用OpenAI兼容格式调用自定义API
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+
+        data = {
+            "model": self.model.model_id,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": kwargs.get('max_tokens', self.model.max_tokens),
+            "temperature": kwargs.get('temperature', self.model.temperature)
+        }
+
+        response = requests.post(
+            f"{self.model.base_url.rstrip('/')}/chat/completions",
+            headers=headers,
+            json=data,
+            timeout=kwargs.get('timeout', settings.API_TIMEOUT)
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def parse_response(self, response: Any) -> str:
+        """解析响应"""
+        if isinstance(response, dict) and "choices" in response:
+            choices = response["choices"]
+            if choices and "message" in choices[0]:
+                return choices[0]["message"]["content"]
+        return ""
+
+
 class MultiLLMManager:
     """多模型LLM管理器"""
 
@@ -375,11 +429,16 @@ class MultiLLMManager:
         cache_key = f"{model_id}:{api_key[:8]}"
 
         if cache_key not in self.clients:
-            model = model_config.get_model_by_id(model_id)
-            if not model:
-                raise ValueError(f"不支持的模型: {model_id}")
+            # 检查是否为自定义API模型
+            if model_id.startswith("custom:"):
+                client = self._create_custom_client(model_id, api_key)
+            else:
+                model = model_config.get_model_by_id(model_id)
+                if not model:
+                    raise ValueError(f"不支持的模型: {model_id}")
 
-            client = self._create_client(model, api_key)
+                client = self._create_client(model, api_key)
+
             self.clients[cache_key] = client
 
         return self.clients[cache_key]
@@ -404,6 +463,29 @@ class MultiLLMManager:
             raise ValueError(f"不支持的模型提供商: {model.provider}")
 
         return client_class(model, api_key)
+
+    def _create_custom_client(self, model_id: str, api_key: str) -> BaseLLMClient:
+        """创建自定义API客户端"""
+        # 解析模型ID: custom:provider_name:model_name
+        parts = model_id.split(":", 2)
+        if len(parts) != 3:
+            raise ValueError(f"无效的自定义模型ID格式: {model_id}")
+
+        _, provider_name, model_name = parts
+
+        # 获取自定义API配置
+        custom_config = custom_api_manager.get_config_by_name(provider_name)
+        if not custom_config:
+            raise ValueError(f"未找到自定义API配置: {provider_name}")
+
+        if not custom_config.is_active:
+            raise ValueError(f"自定义API配置已禁用: {provider_name}")
+
+        # 验证模型是否在支持列表中
+        if model_name not in custom_config.models:
+            raise ValueError(f"模型 {model_name} 不在 {provider_name} 的支持列表中")
+
+        return CustomAPILLMClient(custom_config, model_name, api_key)
 
     def generate_with_retry(
         self,

@@ -7,6 +7,7 @@
 *   **OCR识别**：自动从上传的实验要求图片中提取文本。
 *   **本地知识库**：基于您提供的HSPICE手册（PDF）构建向量数据库，确保信息的专业性和准确性。
 *   **多模型支持**：支持Google Gemini、OpenAI、Anthropic Claude、阿里通义千问、百度文心一言、智谱清言、Kimi、DeepSeek等10+种主流AI模型，用户可自由选择。
+*   **自定义API支持**：类似Cherry Studio，支持用户配置任意OpenAI兼容的自定义API端点，包括本地部署的Ollama、LM Studio等。
 *   **智能代码生成**：结合检索到的相关知识，利用选定的AI模型生成高质量的HSPICE代码。
 *   **Web用户界面**：基于Streamlit构建，提供直观、易于操作的图形界面。
 
@@ -79,6 +80,7 @@ pip install -r requirements.txt
     *   `GOOGLE_API_KEY`: 你从 Google AI Studio 获取的 Gemini API 密钥。
     *   `TESSERACT_CMD`: 你的 Tesseract-OCR 可执行文件的完整路径。
     *   **多模型支持**: 现已支持10+种AI模型，可配置对应API密钥（详见 `.env.example`）
+*   **自定义API**: 支持用户配置任意OpenAI兼容的API端点，类似Cherry Studio体验
 
 ```dotenv
 # .env file example (支持多模型)
@@ -150,7 +152,7 @@ RAG4Spice/
 ### 用户友好
 *   [x] 放宽传入文件的格式限制，使得用户可以上传PDF等。
 *   [x] 新增多模型支持: 用户可以选择10+种国内外AI模型的官方API，包括Google、OpenAI、Claude、通义千问、文心一言、智谱清言、Kimi、DeepSeek等。
-*   [ ] 支持用户自定义url和模型API
+*   [x] 支持用户自定义url和模型API
 *   [ ] 做成一个在线网址
 *   [ ] 加入缓存机制，使得用户不需要重复利用算力生成
 ### 检索机制

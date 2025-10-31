@@ -20,7 +20,6 @@ from ui.model_selector import ModelSelectorComponent
 from ui.model_config_flow import model_config_flow
 from ui.custom_api_config import custom_api_config_ui
 from config.settings import settings
-from config.custom_api import custom_api_manager
 from utils.validators import ValidationError
 
 
@@ -193,10 +192,20 @@ class MainPage:
         if uploaded_file:
             try:
                 extracted_text = upload_component.display_uploaded_file(uploaded_file)
-
+                
+                # ===============================================================
+                # START: 核心修改部分
+                # ---------------------------------------------------------------
+                # 错误代码 (已注释掉):
+                # upload_component.render_extracted_text(extracted_text)
+                
+                # 正确代码:
                 # 创建一个 TaskAnalysisComponent 实例来调用其 render_extracted_text 方法
                 analysis_component = TaskAnalysisComponent()
                 analysis_component.render_extracted_text(extracted_text)
+                # ---------------------------------------------------------------
+                # END: 核心修改部分
+                # ===============================================================
 
             except Exception as e:
                 ErrorDisplayComponent.render_error("文件处理失败", e)
@@ -212,21 +221,30 @@ class MainPage:
         if analysis_component.render_analyze_button(extracted_text):
             with st.spinner("AI分析任务中..."):
                 try:
-                    # 获取模型配置
-                    model_configs = model_config_flow.get_current_config()
-                    analysis_model_id, analysis_api_key = model_configs['analysis']
+                    # 验证输入
+                    if not extracted_text.strip():
+                        st.warning("OCR结果为空，请检查文件或重新上传")
+                        return
 
-                    # 执行任务分析
-                    task_analysis = multi_llm_manager.analyze_tasks(
+                    # 获取任务分析模型配置
+                    analysis_model_id = st.session_state.get('analysis_model_id', settings.DEFAULT_MODEL)
+                    analysis_api_key = st.session_state.get('analysis_api_key', '')
+
+                    if not analysis_api_key:
+                        st.error("❌ 未配置任务分析模型API密钥，请先在侧边栏配置AI模型")
+                        return
+
+                    # 执行任务分析（使用任务分析模型）
+                    task_analysis_dict = multi_llm_manager.analyze_tasks(
                         analysis_model_id, analysis_api_key, extracted_text
                     )
 
-                    # 保存分析结果
-                    st.session_state.task_analysis = task_analysis
+                    # 转换为TaskAnalysis对象
+                    task_analysis = TaskAnalysis.from_dict(task_analysis_dict)
 
-                    # 保存调试信息
-                    st.session_state.last_prompt = extracted_text
-                    st.session_state.last_response = str(task_analysis)
+                    # 保存到会话状态
+                    st.session_state.task_analysis = task_analysis
+                    SuccessDisplayComponent.render_success("任务分析完成！")
 
                     # 显示分析结果
                     analysis_component.render_task_analysis_result(task_analysis)
@@ -279,71 +297,137 @@ class MainPage:
         # 处理添加任务
         if tasks:
             if edit_component.render_add_task_button():
+                new_task_id = task_analysis.get_next_task_id()
                 new_task = Task(
-                    id=len(tasks) + 1,
-                    title=f"任务{len(tasks) + 1}.sp",
-                    description="请在此输入任务描述"
+                    id=new_task_id,
+                    title=f"任务{new_task_id}.sp",
+                    description="新添加的HSPICE仿真任务描述"
                 )
-                tasks.append(new_task)
-                st.session_state.task_analysis.tasks = tasks
+                task_analysis.add_task(new_task)
+                st.session_state.task_analysis = task_analysis
+                st.rerun()
+        else:
+            if edit_component.render_add_first_task_button():
+                new_task = Task(
+                    id=1,
+                    title="任务1.sp",
+                    description="新添加的HSPICE仿真任务描述"
+                )
+                task_analysis.add_task(new_task)
+                st.session_state.task_analysis = task_analysis
                 st.rerun()
 
+        # 保存编辑结果
+        if edit_component.render_save_button():
+            task_analysis.general_description = general_description
+            task_analysis.tasks = tasks
+            st.session_state.task_analysis = task_analysis
+            SuccessDisplayComponent.render_success("任务分析已更新")
+
     def _check_generation_requests(self, tasks: list):
-        """检查代码生成请求"""
-        if not tasks:
-            return
+        """检查并处理代码生成请求"""
+        edit_component = TaskEditComponent()
+        result_component = GenerationResultComponent()
 
-        # 获取模型配置
-        model_configs = model_config_flow.get_current_config()
-        generation_model_id, generation_api_key = model_configs['generation']
+        for i, task in enumerate(tasks):
+            # 检查是否有生成请求
+            generate_key = f"generate_task_{i}_data"
+            if generate_key in st.session_state:
+                task_to_generate = st.session_state[generate_key]
+                del st.session_state[generate_key]  # 清除请求标记
 
-        # 检查每个任务的生成请求
-        for task in tasks:
-            if task.generate_request:
-                self._generate_single_task_code(task, generation_model_id, generation_api_key)
+                # 生成代码
+                self._generate_code_for_task(task_to_generate)
 
-    def _generate_single_task_code(self, task: Task, generation_model_id: str, generation_api_key: str):
-        """生成单个任务的HSPICE代码"""
+    def _generate_code_for_task(self, task: Task):
+        """为单个任务生成代码"""
         with st.spinner(f"正在生成 {task.title} 的HSPICE代码..."):
             try:
-                # 获取检索知识
-                context = retrieval_manager.retrieve_relevant_knowledge(
-                    task.title + " " + task.description
+                # 获取总体描述
+                general_description = st.session_state.task_analysis.general_description
+
+                # 获取代码生成模型配置
+                generation_model_id = st.session_state.get('generation_model_id', settings.DEFAULT_MODEL)
+                generation_api_key = st.session_state.get('generation_api_key', '')
+
+                if not generation_api_key:
+                    st.error("❌ 未配置代码生成模型API密钥，请先在侧边栏配置AI模型")
+                    return
+
+                # 生成代码
+                result_dict = retrieval_manager.generate_single_task_code(
+                    task=task.to_dict(),
+                    general_description=general_description,
+                    visual_info=task.visual_info,
+                    model_id=generation_model_id,
+                    api_key=generation_api_key
                 )
 
-                # 获取任务分析结果
-                task_analysis = st.session_state.task_analysis
-
-                # 生成HSPICE代码
-                analysis, hspice_code = multi_llm_manager.generate_hspice_code(
-                    generation_model_id,
-                    generation_api_key,
-                    context,
-                    task_analysis.general_description,
-                    "",  # MOS连接信息（暂时为空）
-                    task.description,
-                    task.title
+                # 创建结果对象
+                result = GenerationResult(
+                    task_id=result_dict["task_id"],
+                    title=result_dict["title"],
+                    description=result_dict["description"],
+                    analysis=result_dict.get("analysis", ""),
+                    hspice_code=result_dict.get("hspice_code", ""),
+                    error=result_dict.get("error", ""),
+                    success=result_dict.get("success", True)
                 )
 
-                # 创建生成结果
-                generation_result = GenerationResult(
-                    task_id=task.id,
-                    task_title=task.title,
-                    analysis=analysis,
-                    hspice_code=hspice_code
-                )
+                # 显示结果
+                result_component = GenerationResultComponent() # 修正：这里也需要实例化
+                result_component.render_generation_result(result)
 
-                # 保存生成结果
-                st.session_state.generation_results.append(generation_result)
-
-                # 重置生成请求标志
-                task.generate_request = False
-
-                # 显示成功消息
-                SuccessDisplayComponent.render_success(f"成功生成 {task.title} 的HSPICE代码")
+                # 保存结果到会话状态
+                if 'generation_results' not in st.session_state:
+                    st.session_state.generation_results = []
+                st.session_state.generation_results.append(result)
 
             except Exception as e:
-                ErrorDisplayComponent.render_error(f"生成 {task.title} 的HSPICE代码失败", e)
+                ErrorDisplayComponent.render_error(f"调用AI失败", e)
+
+
+class TaskAnalysisPage:
+    """任务分析页面（备用）"""
+
+    @staticmethod
+    def render():
+        """渲染任务分析页面"""
+        st.title("📋 任务分析")
+        st.write("此页面用于单独的任务分析功能")
+
+
+class SettingsPage:
+    """设置页面（备用）"""
+
+    @staticmethod
+    def render():
+        """渲染设置页面"""
+        st.title("⚙️ 设置")
+        st.write("此页面用于系统配置")
+
+
+class PageRouter:
+    """页面路由器"""
+
+    @staticmethod
+    def render_page(page_name: str = "main"):
+        """
+        根据页面名称渲染对应页面
+
+        Args:
+            page_name: 页面名称
+        """
+        if page_name == "main":
+            main_page = MainPage()
+            main_page.render()
+        elif page_name == "task_analysis":
+            TaskAnalysisPage.render()
+        elif page_name == "settings":
+            SettingsPage.render()
+        else:
+            st.error(f"未知页面: {page_name}")
+            MainPage().render()
 
 
 # 便捷函数
@@ -373,7 +457,3 @@ def render_page_with_sidebar():
 
     # 渲染选中的页面
     PageRouter.render_page(selected_page)
-
-
-if __name__ == "__main__":
-    MainPage().render()
