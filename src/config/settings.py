@@ -33,12 +33,16 @@ class Settings:
     # OCR配置
     TESSERACT_CMD: Optional[str] = os.getenv("TESSERACT_CMD", "tesseract")
 
-    # Google API配置
-    GOOGLE_API_KEY: Optional[str] = os.getenv("GOOGLE_API_KEY")
+    # 多模型配置
+    DEFAULT_MODEL: str = "gemini-2.5-flash"  # 默认选择的模型（用户可修改）
+    ENABLE_MULTI_MODEL: bool = True  # 是否启用多模型功能
 
-    # LLM模型配置
+    # LLM模型配置 (保持向后兼容)
     LLM_PRO_MODEL: str = "gemini-2.5-flash"
     LLM_FLASH_MODEL: str = "gemini-2.5-flash"
+
+    # 向后兼容：保留Google API配置，但不再特殊处理
+    GOOGLE_API_KEY: Optional[str] = os.getenv("GOOGLE_API_KEY")
 
     # 应用配置
     APP_TITLE: str = "🤖 HSPICE RAG 代码生成助手"
@@ -59,17 +63,76 @@ class Settings:
     def validate(self) -> bool:
         """
         验证必要的配置项是否设置正确 (实例方法)
+        不再直接抛出错误，而是返回验证结果
 
         Returns:
             bool: 配置是否有效
         """
-        if not self.GOOGLE_API_KEY:
-            raise ValueError("GOOGLE_API_KEY 环境变量未设置")
+        # 基本验证 - 只检查Tesseract，API密钥不再是必需的
+        # 用户可以通过网页界面配置任何模型
+        return bool(self.TESSERACT_CMD)
 
-        if not self.TESSERACT_CMD:
-            raise ValueError("TESSERACT_CMD 环境变量未设置")
+    def _check_any_api_key_available(self) -> bool:
+        """检查是否有任何可用的API密钥"""
+        try:
+            from .models import model_config
+            available_models = model_config.get_all_models()
 
-        return True
+            for model in available_models:
+                env_key = model.get_env_key()
+                if env_key and os.getenv(env_key):
+                    return True
+            return False
+        except Exception:
+            return False
+
+    def get_validation_status(self) -> dict:
+        """
+        获取详细的验证状态信息
+
+        Returns:
+            dict: 验证状态信息
+        """
+        status = {
+            "tesseract": bool(self.TESSERACT_CMD),
+            "api_keys": [],
+            "multi_model_enabled": self.ENABLE_MULTI_MODEL,
+            "has_any_api_key": False,
+            "recommendations": []
+        }
+
+        # 检查API密钥
+        try:
+            from .models import model_config
+            available_models = model_config.get_all_models()
+
+            for model in available_models:
+                env_key = model.get_env_key()
+                has_key = env_key and os.getenv(env_key)
+
+                status["api_keys"].append({
+                    "model_id": model.model_id,
+                    "display_name": model.display_name,
+                    "provider": model.provider.value,
+                    "env_key": env_key,
+                    "has_key": bool(has_key)
+                })
+
+                if has_key:
+                    status["has_any_api_key"] = True
+
+        except Exception as e:
+            status["api_keys_error"] = str(e)
+
+        # 生成建议
+        if not status["tesseract"]:
+            status["recommendations"].append("请安装Tesseract OCR并设置TESSERACT_CMD环境变量")
+
+        if not status["has_any_api_key"]:
+            status["recommendations"].append("请至少配置一个AI模型的API密钥")
+            status["recommendations"].append("建议使用Google Gemini 2.5 Flash作为入门模型")
+
+        return status
 
     def get_pdf_path(self) -> str:
         """
@@ -115,15 +178,11 @@ def get_persist_directory() -> str:
     return settings.ensure_directory(settings.PERSIST_DIRECTORY)
 
 
-def get_google_api_key() -> str:
-    """获取Google API密钥"""
-    if not settings.GOOGLE_API_KEY:
-        raise ValueError("Google API密钥未配置")
+def get_google_api_key() -> Optional[str]:
+    """获取Google API密钥（向后兼容函数）"""
     return settings.GOOGLE_API_KEY
 
 
-def get_tesseract_cmd() -> str:
+def get_tesseract_cmd() -> Optional[str]:
     """获取Tesseract命令路径"""
-    if not settings.TESSERACT_CMD:
-        raise ValueError("Tesseract命令未配置")
     return settings.TESSERACT_CMD

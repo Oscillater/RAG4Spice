@@ -8,8 +8,8 @@ import streamlit as st
 from typing import List, Dict, Any, Optional, Callable
 from PIL import Image
 
-from ..models.task_models import Task, TaskAnalysis, GenerationResult
-from ..utils.validators import ValidationError
+from models.task_models import Task, TaskAnalysis, GenerationResult
+from utils.validators import ValidationError
 
 
 class FileUploadComponent:
@@ -62,7 +62,7 @@ class FileUploadComponent:
             st.success("📄 已上传PDF文件")
             with st.spinner("正在提取PDF文本..."):
                 try:
-                    from ..utils.pdf_parser import extract_text_from_pdf
+                    from utils.pdf_parser import extract_text_from_pdf
                     extracted_text = extract_text_from_pdf(uploaded_file)
                     if extracted_text:
                         st.success(f"✅ PDF文本提取成功，共提取 {len(extracted_text)} 个字符")
@@ -78,7 +78,7 @@ class FileUploadComponent:
             # OCR处理
             try:
                 with st.spinner("正在进行OCR识别..."):
-                    from ..utils.ocr import extract_text_from_image
+                    from utils.ocr import extract_text_from_image
                     extracted_text = extract_text_from_image(image)
                     if extracted_text:
                         st.success(f"✅ OCR识别成功，共识别 {len(extracted_text)} 个字符")

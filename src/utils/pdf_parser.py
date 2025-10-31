@@ -9,7 +9,7 @@ import PyPDF2
 from typing import List, Optional, Union
 from pathlib import Path
 
-from ..config.settings import settings
+from config.settings import settings
 
 
 class PDFParser:

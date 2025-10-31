@@ -15,8 +15,8 @@ from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.documents import Document
 
-from ..config.settings import settings
-from ..utils.validators import FileValidator, ValidationError
+from config.settings import settings
+from utils.validators import FileValidator, ValidationError
 
 
 class DatabaseManager:

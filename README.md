@@ -6,7 +6,8 @@
 
 *   **OCR识别**：自动从上传的实验要求图片中提取文本。
 *   **本地知识库**：基于您提供的HSPICE手册（PDF）构建向量数据库，确保信息的专业性和准确性。
-*   **智能代码生成**：结合检索到的相关知识，利用Google Gemini模型生成高质量的HSPICE代码。
+*   **多模型支持**：支持Google Gemini、OpenAI、Anthropic Claude、阿里通义千问、百度文心一言、智谱清言、Kimi、DeepSeek等10+种主流AI模型，用户可自由选择。
+*   **智能代码生成**：结合检索到的相关知识，利用选定的AI模型生成高质量的HSPICE代码。
 *   **Web用户界面**：基于Streamlit构建，提供直观、易于操作的图形界面。
 
 ## 🛠️ 技术架构
@@ -77,13 +78,22 @@ pip install -r requirements.txt
 2.  打开 `.env` 文件并填入以下信息：
     *   `GOOGLE_API_KEY`: 你从 Google AI Studio 获取的 Gemini API 密钥。
     *   `TESSERACT_CMD`: 你的 Tesseract-OCR 可执行文件的完整路径。
+    *   **多模型支持**: 现已支持10+种AI模型，可配置对应API密钥（详见 `.env.example`）
 
 ```dotenv
-# .env file example
+# .env file example (支持多模型)
 GOOGLE_API_KEY="your_google_api_key_here"
+OPENAI_API_KEY="your_openai_api_key_here"
+ANTHROPIC_API_KEY="your_anthropic_api_key_here"
+DASHSCOPE_API_KEY="your_dashscope_api_key_here"  # 阿里云通义千问
+ZHIPUAI_API_KEY="your_zhipuai_api_key_here"      # 智谱清言
+MOONSHOT_API_KEY="your_moonshot_api_key_here"      # Kimi
+DEEPSEEK_API_KEY="your_deepseek_api_key_here"      # DeepSeek
 TESSERACT_CMD="D:/Tesseract/tesseract.exe" # Windows示例路径
 # TESSERACT_CMD="/usr/bin/tesseract" # Linux示例路径
 ```
+
+📖 **详细的多模型配置指南**: 请查看 [MULTI_MODEL_GUIDE.md](./MULTI_MODEL_GUIDE.md) 了解如何配置和使用不同的AI模型。
 
 ### 6. 构建本地知识库
 ```bash
@@ -104,10 +114,12 @@ streamlit run app.py
 RAG4Spice/
 ├── src/                    # 源代码目录
 │   ├── config/             # 配置管理模块
-│   │   └── settings.py     # 统一配置管理
+│   │   ├── settings.py     # 统一配置管理
+│   │   └── models.py       # 模型配置定义
 │   ├── core/               # 核心业务逻辑
 │   │   ├── database.py     # 向量数据库管理
 │   │   ├── llm.py         # LLM交互
+│   │   ├── multi_llm.py    # 多模型支持
 │   │   └── retrieval.py   # 检索逻辑
 │   ├── utils/              # 工具函数模块
 │   │   ├── ocr.py         # OCR处理
@@ -116,7 +128,9 @@ RAG4Spice/
 │   │   └── validators.py  # 数据验证
 │   ├── ui/                 # 用户界面模块
 │   │   ├── components.py   # UI组件
-│   │   └── pages.py       # 页面逻辑
+│   │   ├── pages.py       # 页面逻辑
+│   │   ├── model_selector.py # 模型选择器
+│   │   └── model_config_flow.py # 模型配置流程
 │   └── models/             # 数据模型
 │       └── task_models.py   # 任务数据模型
 ├── hspice_db/             # 生成的向量数据库
@@ -127,15 +141,16 @@ RAG4Spice/
 ├── app.py                 # Streamlit应用主程序 (重构后)
 ├── build_database.py      # 构建向量数据库的脚本 (重构后)
 ├── requirements.txt        # 项目依赖 (清理后)
+├── MULTI_MODEL_GUIDE.md   # 多模型配置指南
 └── README.md             # 项目文档
 ```
 
 
 ## 🔮 未来计划
-这是一个基础版本，未来计划进行以下改进：
 ### 用户友好
 *   [x] 放宽传入文件的格式限制，使得用户可以上传PDF等。
-*   [ ] 修改可用性，使得用户可以自己选择api和模型。
+*   [x] ✨ 新增多模型支持: 用户可以选择10+种国内外AI模型的官方API，包括Google、OpenAI、Claude、通义千问、文心一言、智谱清言、Kimi、DeepSeek等。
+*   [x] 支持用户自定义url和模型API
 *   [ ] 做成一个在线网址
 *   [ ] 加入缓存机制，使得用户不需要重复利用算力生成
 ### 检索机制

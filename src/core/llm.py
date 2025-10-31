@@ -10,8 +10,8 @@ from typing import Dict, List, Any, Optional, Tuple
 
 import google.generativeai as genai
 
-from ..config.settings import settings, get_google_api_key
-from ..utils.text_processing import extract_json_from_text, safe_error_message, normalize_line_endings
+from config.settings import settings, get_google_api_key
+from utils.text_processing import extract_json_from_text, safe_error_message, normalize_line_endings
 
 class LLMManager:
     """大语言模型管理器"""

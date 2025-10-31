@@ -11,7 +11,7 @@ from PIL import Image
 import pytesseract
 from typing import Optional, Tuple
 
-from ..config.settings import get_tesseract_cmd
+from config.settings import get_tesseract_cmd
 
 
 class OCRProcessor:

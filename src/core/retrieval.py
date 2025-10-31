@@ -8,10 +8,11 @@ from typing import List, Dict, Any, Optional
 
 from langchain_core.documents import Document
 
-from .database import db_manager
-from .llm import llm_manager
-from ..config.settings import settings
-from ..utils.text_processing import ensure_string
+from core.database import db_manager
+from core.llm import llm_manager
+from core.multi_llm import multi_llm_manager
+from config.settings import settings
+from utils.text_processing import ensure_string
 
 
 class RetrievalManager:
@@ -92,7 +93,9 @@ class RetrievalManager:
         self,
         task: Dict[str, Any],
         general_description: str,
-        visual_info: str
+        visual_info: str,
+        model_id: Optional[str] = None,
+        api_key: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         为单个任务生成HSPICE代码
@@ -101,6 +104,8 @@ class RetrievalManager:
             task: 任务信息
             general_description: 总体描述
             visual_info: 视觉信息
+            model_id: 模型ID (可选，默认使用会话中的模型)
+            api_key: API密钥 (可选，默认使用会话中的密钥)
 
         Returns:
             Dict: 生成结果
@@ -129,13 +134,26 @@ class RetrievalManager:
             context = self._retrieve_context_for_task(general_description)
 
             # 2. 生成代码
-            analysis, hspice_code = llm_manager.generate_hspice_code(
-                context=context,
-                requirements=ensure_string(general_description),
-                mos_connections=ensure_string(visual_info),
-                task_description=description,
-                filename=title
-            )
+            if model_id and api_key:
+                # 使用指定的模型
+                analysis, hspice_code = multi_llm_manager.generate_hspice_code(
+                    model_id=model_id,
+                    api_key=api_key,
+                    context=context,
+                    requirements=ensure_string(general_description),
+                    mos_connections=ensure_string(visual_info),
+                    task_description=description,
+                    filename=title
+                )
+            else:
+                # 使用默认的LLM管理器（向后兼容）
+                analysis, hspice_code = llm_manager.generate_hspice_code(
+                    context=context,
+                    requirements=ensure_string(general_description),
+                    mos_connections=ensure_string(visual_info),
+                    task_description=description,
+                    filename=title
+                )
 
             result = {
                 "task_id": task_id,

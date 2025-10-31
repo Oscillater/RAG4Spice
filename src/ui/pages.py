@@ -5,16 +5,21 @@
 """
 
 import streamlit as st
+import os
 from typing import Optional, Dict, Any
 
-from ..models.task_models import TaskAnalysis, Task, GenerationResult
-from ..core.llm import analyze_tasks
-from ..core.retrieval import generate_task_code
-from ..ui.components import (
+from models.task_models import TaskAnalysis, Task, GenerationResult
+from core.llm import analyze_tasks
+from core.retrieval import generate_task_code, retrieval_manager
+from core.multi_llm import multi_llm_manager
+from ui.components import (
     FileUploadComponent, TaskAnalysisComponent, TaskEditComponent,
     GenerationResultComponent, ErrorDisplayComponent, SuccessDisplayComponent
 )
-from ..utils.validators import ValidationError
+from ui.model_selector import ModelSelectorComponent
+from ui.model_config_flow import model_config_flow
+from config.settings import settings
+from utils.validators import ValidationError
 
 
 class MainPage:
@@ -35,11 +40,109 @@ class MainPage:
         if 'generation_results' not in st.session_state:
             st.session_state.generation_results = []
 
+        # 确保API连接状态已初始化（避免在配置流程之前访问时报错）
+        if 'api_connection_status' not in st.session_state:
+            st.session_state.api_connection_status = {
+                'analysis': {'connected': False, 'model': '', 'error': ''},
+                'generation': {'connected': False, 'model': '', 'error': ''}
+            }
+
+        # 初始化模型选择器
+        self.model_selector = ModelSelectorComponent()
+
+    def _render_config_status_warnings(self):
+        """渲染配置状态警告"""
+        validation_status = settings.get_validation_status()
+
+        # Tesseract警告
+        if not validation_status["tesseract"]:
+            st.warning("⚠️ **Tesseract OCR未配置**")
+            st.info("💡 图片识别功能需要Tesseract OCR。请安装后设置环境变量 `TESSERACT_CMD`")
+        else:
+            st.success("✅ Tesseract OCR已配置")
+
+        # API密钥信息（不再是警告，只是提示）
+        if validation_status["has_any_api_key"]:
+            configured_count = sum(1 for key in validation_status.get("api_keys", []) if key["has_key"])
+            if configured_count > 0:
+                st.success(f"✅ 已在环境变量中配置 {configured_count} 个AI模型")
+        else:
+            st.info("💡 **AI模型配置提示**")
+            st.write("未在环境变量中检测到API密钥，您可以通过侧边栏配置任何支持的AI模型。")
+            st.write("🔧 **支持的模型提供商包括：**")
+            st.write("- Google Gemini, OpenAI, Anthropic Claude")
+            st.write("- 阿里云通义千问, 百度文心一言, 智谱清言")
+            st.write("- 月之暗面Kimi, DeepSeek, Mistral AI, Cohere")
+            st.info("👉 请在侧边栏完成AI模型配置后开始使用")
+
+    def _render_api_connection_status(self):
+        """渲染API连接状态"""
+        # 使用状态容器来显示连接状态
+        with st.container():
+            # 在页面顶部显示连接状态徽章
+            col1, col2, col3 = st.columns([2, 1, 1])
+
+            with col1:
+                st.write("")  # 空列用于布局
+
+            with col2:
+                if model_config_flow.is_config_complete():
+                    st.success("🟢 AI模型连接正常")
+                else:
+                    # 检查部分连接状态
+                    analysis_connected = st.session_state.api_connection_status['analysis']['connected']
+                    generation_connected = st.session_state.api_connection_status['generation']['connected']
+                    if analysis_connected or generation_connected:
+                        st.warning("🟡 部分AI模型连接异常")
+                    else:
+                        st.error("🔴 AI模型未连接")
+
+            with col3:
+                if st.button("🔄 重新配置", help="重新配置AI模型", key="main_reconfigure"):
+                    # 重置配置状态
+                    st.session_state.api_connection_status = {
+                        'analysis': {'connected': False, 'model': '', 'error': ''},
+                        'generation': {'connected': False, 'model': '', 'error': ''}
+                    }
+                    st.rerun()
+
+            # 显示详细连接信息（可折叠）
+            if not model_config_flow.is_config_complete():
+                with st.expander("📊 查看详细连接状态", expanded=False):
+                    model_config_flow._display_connection_status()
+
     def render(self):
         """渲染主页面"""
         # 设置页面标题
         st.title("🤖 HSPICE RAG 代码生成助手")
         st.caption("上传实验截图，分析任务，生成HSPICE代码")
+
+        # 显示配置状态提示
+        self._render_config_status_warnings()
+
+        # 显示API连接状态（所有模式下都显示）
+        self._render_api_connection_status()
+
+        # 模型配置部分（始终显示配置流程）
+        with st.sidebar:
+            # 使用新的配置流程
+            config_complete = model_config_flow.render_config_flow()
+
+            if not config_complete:
+                st.warning("⚠️ 请完成AI模型配置和连接测试")
+                st.info("💡 配置完成后系统将自动刷新页面")
+                return
+
+            # 获取模型配置
+            model_configs = model_config_flow.get_current_config()
+            analysis_model_id, analysis_api_key = model_configs['analysis']
+            generation_model_id, generation_api_key = model_configs['generation']
+
+            # 保存当前模型配置到会话状态
+            st.session_state.analysis_model_id = analysis_model_id
+            st.session_state.analysis_api_key = analysis_api_key
+            st.session_state.generation_model_id = generation_model_id
+            st.session_state.generation_api_key = generation_api_key
 
         # 第一部分：文件上传和文本提取
         self._render_file_upload_section()
@@ -100,8 +203,18 @@ class MainPage:
                         st.warning("OCR结果为空，请检查文件或重新上传")
                         return
 
-                    # 执行任务分析
-                    task_analysis_dict = analyze_tasks(extracted_text)
+                    # 获取任务分析模型配置
+                    analysis_model_id = st.session_state.get('analysis_model_id', settings.DEFAULT_MODEL)
+                    analysis_api_key = st.session_state.get('analysis_api_key', '')
+
+                    if not analysis_api_key:
+                        st.error("❌ 未配置任务分析模型API密钥，请先在侧边栏配置AI模型")
+                        return
+
+                    # 执行任务分析（使用任务分析模型）
+                    task_analysis_dict = multi_llm_manager.analyze_tasks(
+                        analysis_model_id, analysis_api_key, extracted_text
+                    )
 
                     # 转换为TaskAnalysis对象
                     task_analysis = TaskAnalysis.from_dict(task_analysis_dict)
@@ -210,11 +323,21 @@ class MainPage:
                 # 获取总体描述
                 general_description = st.session_state.task_analysis.general_description
 
+                # 获取代码生成模型配置
+                generation_model_id = st.session_state.get('generation_model_id', settings.DEFAULT_MODEL)
+                generation_api_key = st.session_state.get('generation_api_key', '')
+
+                if not generation_api_key:
+                    st.error("❌ 未配置代码生成模型API密钥，请先在侧边栏配置AI模型")
+                    return
+
                 # 生成代码
-                result_dict = generate_task_code(
+                result_dict = retrieval_manager.generate_single_task_code(
                     task=task.to_dict(),
                     general_description=general_description,
-                    visual_info=task.visual_info
+                    visual_info=task.visual_info,
+                    model_id=generation_model_id,
+                    api_key=generation_api_key
                 )
 
                 # 创建结果对象
