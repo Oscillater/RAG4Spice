@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 from langchain_core.documents import Document
 
 from core.database import db_manager
-from core.llm import llm_manager
+# from core.llm import llm_manager  # 已迁移到multi_llm
 from core.multi_llm import multi_llm_manager
 from config.settings import settings
 from utils.text_processing import ensure_string
@@ -93,7 +93,7 @@ class RetrievalManager:
         self,
         task: Dict[str, Any],
         general_description: str,
-        visual_info: str,
+        additional_info: str,
         model_id: Optional[str] = None,
         api_key: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -103,7 +103,7 @@ class RetrievalManager:
         Args:
             task: 任务信息
             general_description: 总体描述
-            visual_info: 视觉信息
+            additional_info: 补充信息
             model_id: 模型ID (可选，默认使用会话中的模型)
             api_key: API密钥 (可选，默认使用会话中的密钥)
 
@@ -141,16 +141,18 @@ class RetrievalManager:
                     api_key=api_key,
                     context=context,
                     requirements=ensure_string(general_description),
-                    mos_connections=ensure_string(visual_info),
+                    mos_connections=ensure_string(additional_info),
                     task_description=description,
                     filename=title
                 )
             else:
-                # 使用默认的LLM管理器（向后兼容）
-                analysis, hspice_code = llm_manager.generate_hspice_code(
+                # 使用多模型LLM管理器
+                analysis, hspice_code = multi_llm_manager.generate_hspice_code(
+                    model_id=None,  # 使用默认模型
+                    api_key=None,  # 使用默认API密钥
                     context=context,
                     requirements=ensure_string(general_description),
-                    mos_connections=ensure_string(visual_info),
+                    additional_info=ensure_string(additional_info),
                     task_description=description,
                     filename=title
                 )
@@ -231,14 +233,14 @@ class RetrievalManager:
 
         for i, task in enumerate(tasks):
             try:
-                # 获取任务的视觉信息
-                visual_info = task.get("visual_info", "")
+                # 获取任务的补充信息
+                additional_info = task.get("additional_info", "")
 
                 # 生成单个任务的代码
                 result = self.generate_single_task_code(
                     task=task,
                     general_description=general_description,
-                    visual_info=visual_info
+                    additional_info=additional_info
                 )
 
                 results.append(result)
@@ -308,7 +310,7 @@ def retrieve_knowledge(query: str, k: int = None) -> List[Document]:
 def generate_task_code(
     task: Dict[str, Any],
     general_description: str,
-    visual_info: str = ""
+    additional_info: str = ""
 ) -> Dict[str, Any]:
     """
     便捷函数：生成单个任务的HSPICE代码
@@ -316,11 +318,11 @@ def generate_task_code(
     Args:
         task: 任务信息
         general_description: 总体描述
-        visual_info: 视觉信息
+        additional_info: 补充信息
 
     Returns:
         Dict: 生成结果
     """
     return retrieval_manager.generate_single_task_code(
-        task, general_description, visual_info
+        task, general_description, additional_info
     )

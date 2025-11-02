@@ -608,30 +608,53 @@ class MultiLLMManager:
    - 可以是多种分析类型的组合（DC、AC、TRAN等）
    - 描述要清晰说明该文件的测试目标和预期结果
 
+5. **知识字段要求**
+   - 每个task必须包含knowledge字段
+   - knowledge字段应从OCR文本中提取具体的技术信息
+   - **包括以下内容**：
+     * 要求或提示使用的相关hspice语法
+     * OCR文件中提到的与description相关的代码教程，方法等
+     * 文件中明确提到的HSPICE语法提示（如".PARAM"、".DC"、".AC"等）
+     * 特殊的仿真指令或要求（如"步长"、"精度"、"收敛条件"等）
+     * 文件中标出的参数格式或数值要求
+     * 特殊的模型调用或库文件引用
+     * 任何明确的技术约束或条件
+   - **如果OCR文本中没有上述技术信息，knowledge字段设为空字符串""，但最好要有**
+   - **不要将general description或task description的内容重复到knowledge中**
+
 实验文本：{ocr_text}
 
-请输出JSON格式：
+请严格按照以下JSON格式输出（每个字段都是必需的）：
 {{
   "general_description": "实验总体描述和公共环境配置",
   "tasks": [
     {{
       "id": 1,
       "title": "文件名1.sp",
-      "description": "该HSPICE文件的完整功能描述和测试内容，包含所有需要执行的仿真分析"
+      "description": "该HSPICE文件的完整功能描述和测试内容，包含所有需要执行的仿真分析",
+      "knowledge": "从OCR文本中提取的具体技术信息，如语法提示、参数要求等"
     }},
     {{
       "id": 2,
       "title": "文件名2.sp",
-      "description": "该HSPICE文件的完整功能描述和测试内容，包含所有需要执行的仿真分析"
+      "description": "该HSPICE文件的完整功能描述和测试内容，包含所有需要执行的仿真分析",
+      "knowledge": "从OCR文本中提取的具体技术信息，如语法提示、参数要求等"
     }}
   ]
 }}
+
+**⚠️ 重要提醒：每个task对象必须包含以下4个字段，缺一不可！**
+- `id`: 数字类型
+- `title`: 字符串类型，必须以.sp结尾
+- `description`: 字符串类型，详细描述仿真内容
+- `knowledge`: 字符串类型，从OCR提取的技术信息（可为空字符串""）
 
 **关键要点：**
 - general_description必须包含所有HSPICE文件共用的环境配置
 - **优先选择多任务结构，每个task对应一个独立的HSPICE文件**
 - **只有在实验极其简单且只有单一分析类型时才使用单任务**
 - 每个task的description要完整描述该文件的所有仿真内容
+- **每个task必须包含knowledge字段，即使为空也要包含这个字段**
 - 多任务结构有助于代码管理、调试和模块化设计
 - 考虑按分析类型、测试环境、电路模块等因素合理分解任务
 """
@@ -656,12 +679,17 @@ class MultiLLMManager:
         try:
             # 标准化文本
             cleaned_text = normalize_line_endings(response_text.strip())
+            print(f"清理后的响应文本（前500字符）: {cleaned_text[:500]}")
 
             # 尝试提取JSON
             task_data = extract_json_from_text(cleaned_text)
 
             if task_data is None:
                 print("无法从响应中提取有效JSON，返回默认结构")
+                print("=" * 50)
+                print("完整响应文本:")
+                print(response_text)
+                print("=" * 50)
                 return {
                     "general_description": f"无法解析任务分析结果\n原始响应: {response_text[:200]}...",
                     "tasks": []
@@ -708,14 +736,22 @@ class MultiLLMManager:
                     normalized_task = {
                         "id": task.get("id", i + 1),
                         "title": task.get("title", f"任务{i+1}.sp"),
-                        "description": str(task.get("description", "")).strip()
+                        "description": str(task.get("description", "")).strip(),
+                        "knowledge": str(task.get("knowledge", "")).strip(),
+                        "additional_info": str(task.get("additional_info", "")).strip(),
+                        "generate_request": task.get("generate_request", False)
                     }
+                    print(f"处理任务{i+1}: {normalized_task}")
                 else:
                     normalized_task = {
                         "id": i + 1,
                         "title": f"任务{i+1}.sp",
-                        "description": str(task).strip()
+                        "description": str(task).strip(),
+                        "knowledge": "",
+                        "additional_info": "",
+                        "generate_request": False
                     }
+                    print(f"处理任务{i+1}（非字典格式）: {normalized_task}")
                 normalized_tasks.append(normalized_task)
 
             return {
@@ -735,9 +771,10 @@ class MultiLLMManager:
         api_key: str,
         context: str,
         requirements: str,
-        mos_connections: str,
+        additional_info: str,
         task_description: str,
-        filename: str
+        filename: str,
+        task_knowledge: str = ""
     ) -> Tuple[str, str]:
         """
         生成HSPICE代码
@@ -747,9 +784,10 @@ class MultiLLMManager:
             api_key: API密钥
             context: 检索到的知识上下文
             requirements: 实验要求
-            mos_connections: MOS管连接信息
+            additional_info: 补充信息（用户添加的任何相关内容）
             task_description: 任务描述
             filename: HSPICE文件名
+            task_knowledge: 任务相关知识
 
         Returns:
             Tuple[str, str]: (分析文本, HSPICE代码)
@@ -757,7 +795,7 @@ class MultiLLMManager:
         # 代码生成提示词
         code_generation_prompt = f"""
 你是一位精通HSPICE仿真的资深电路设计工程师。
-请根据用户提供的"实验目标"、"电路图视觉信息"和"仿真任务描述"，并参考下方提供的"相关HSPICE知识"，完成以下任务：
+请根据用户提供的"实验目标"、"补充信息"和"仿真任务描述"，并参考下方提供的"相关HSPICE知识"，完成以下任务：
 
 1.  首先，对仿真思路进行简要分析，解释你将如何实现该HSPICE文件的仿真目标。
 2.  然后，生成一份完整、可执行的HSPICE仿真代码。
@@ -769,11 +807,14 @@ class MultiLLMManager:
 ## 实验目标:
 {requirements}
 
-## 电路图视觉信息:
-{mos_connections}
+## 补充信息:
+{additional_info}
 
 ## 仿真任务描述:
 {task_description}
+
+## 任务相关知识:
+{task_knowledge}
 
 ## HSPICE文件名:
 {filename}
@@ -782,6 +823,7 @@ class MultiLLMManager:
 - 你的分析内容应该直接书写。
 - 请务必将最终的HSPICE代码包裹在```hspice ... ```中。
 - 生成的代码应该是一个完整的、可独立运行的HSPICE文件。
+- 考虑代码的可复用性，当使用子模块使得代码思路更清晰时，标出子模块。
 - 代码中应该包含所有必要的分析命令来完成指定的仿真任务。
 """
 
@@ -789,8 +831,31 @@ class MultiLLMManager:
             print(f"开始生成 {filename} 的HSPICE代码...")
             response_text = self.generate_with_retry(model_id, api_key, code_generation_prompt)
 
+            print(f"{filename} 模型完整响应:")
+            print("=" * 50)
+            print(response_text)
+            print("=" * 50)
+
             # 解析响应
             analysis, hspice_code = self._parse_llm_output(response_text)
+
+            print(f"{filename} 解析结果:")
+            print(f"分析内容长度: {len(analysis)}")
+            print(f"代码内容长度: {len(hspice_code)}")
+
+            print("=" * 50)
+            print("完整分析内容:")
+            print(analysis)
+            print("=" * 50)
+
+            if hspice_code:
+                print("=" * 50)
+                print("完整代码内容:")
+                print(hspice_code)
+                print("=" * 50)
+            else:
+                print("警告: 没有提取到代码内容")
+
             print(f"{filename} 代码生成完成")
 
             return analysis, hspice_code

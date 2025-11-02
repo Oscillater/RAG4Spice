@@ -15,7 +15,9 @@ class Task:
     id: int
     title: str
     description: str
-    visual_info: str = ""
+    additional_info: str = ""
+    knowledge: str = ""
+    generate_request: bool = False
 
     def __post_init__(self):
         """初始化后验证"""
@@ -34,7 +36,8 @@ class Task:
         # 清理字符串
         self.title = self.title.strip()
         self.description = self.description.strip()
-        self.visual_info = self.visual_info.strip()
+        self.additional_info = self.additional_info.strip()
+        self.knowledge = self.knowledge.strip()
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
@@ -42,7 +45,9 @@ class Task:
             "id": self.id,
             "title": self.title,
             "description": self.description,
-            "visual_info": self.visual_info
+            "additional_info": self.additional_info,
+            "knowledge": self.knowledge,
+            "generate_request": self.generate_request
         }
 
     @classmethod
@@ -52,7 +57,9 @@ class Task:
             id=data.get("id", 1),
             title=data.get("title", "任务1.sp"),
             description=data.get("description", ""),
-            visual_info=data.get("visual_info", "")
+            additional_info=data.get("additional_info", ""),
+            knowledge=data.get("knowledge", ""),
+            generate_request=data.get("generate_request", False)
         )
 
     def copy(self) -> 'Task':
@@ -92,7 +99,9 @@ class TaskAnalysis:
                 id=new_id,
                 title=task.title,
                 description=task.description,
-                visual_info=task.visual_info
+                additional_info=getattr(task, 'additional_info', ''),
+                knowledge=getattr(task, 'knowledge', ''),
+                generate_request=getattr(task, 'generate_request', False)
             )
 
         self.tasks.append(task)

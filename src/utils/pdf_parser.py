@@ -1,180 +1,134 @@
 """
-PDF解析模块
+PDF文本提取模块
 
-提供PDF文件文本提取功能，支持处理多页PDF文档。
+提供从PDF文件中提取文本的功能。
 """
 
 import io
-import PyPDF2
-from typing import List, Optional, Union
-from pathlib import Path
+import streamlit as st
+from typing import Optional
 
-from config.settings import settings
+try:
+    import PyPDF2
+    PYPDF2_AVAILABLE = True
+except ImportError:
+    PYPDF2_AVAILABLE = False
 
-
-class PDFParser:
-    """PDF解析器"""
-
-    @staticmethod
-    def extract_text_from_file(file_path: Union[str, Path]) -> str:
-        """
-        从PDF文件路径提取文本
-
-        Args:
-            file_path: PDF文件路径
-
-        Returns:
-            str: 提取的文本
-
-        Raises:
-            FileNotFoundError: 文件不存在
-            RuntimeError: PDF解析失败
-        """
-        file_path = Path(file_path)
-        if not file_path.exists():
-            raise FileNotFoundError(f"PDF文件不存在: {file_path}")
-
-        try:
-            with open(file_path, 'rb') as file:
-                return PDFParser.extract_text_from_file_obj(file)
-        except Exception as e:
-            raise RuntimeError(f"PDF文件读取失败: {str(e)}")
-
-    @staticmethod
-    def extract_text_from_file_obj(file_obj: io.BytesIO) -> str:
-        """
-        从文件对象提取文本
-
-        Args:
-            file_obj: PDF文件对象
-
-        Returns:
-            str: 提取的文本
-
-        Raises:
-            RuntimeError: PDF解析失败
-        """
-        try:
-            pdf_reader = PyPDF2.PdfReader(file_obj)
-            text_parts = []
-
-            for page_num, page in enumerate(pdf_reader.pages, 1):
-                try:
-                    page_text = page.extract_text()
-                    if page_text.strip():
-                        text_parts.append(f"--- Page {page_num} ---\n{page_text}")
-                except Exception as e:
-                    print(f"警告: 第{page_num}页解析失败: {str(e)}")
-                    continue
-
-            return "\n\n".join(text_parts).strip()
-
-        except Exception as e:
-            raise RuntimeError(f"PDF解析失败: {str(e)}")
-
-    @staticmethod
-    def extract_text_from_uploaded_file(uploaded_file) -> str:
-        """
-        从Streamlit上传的文件对象提取文本
-
-        Args:
-            uploaded_file: Streamlit上传的文件对象
-
-        Returns:
-            str: 提取的文本
-
-        Raises:
-            RuntimeError: PDF解析失败
-        """
-        try:
-            # 重置文件指针
-            uploaded_file.seek(0)
-            return PDFParser.extract_text_from_file_obj(uploaded_file)
-        except Exception as e:
-            raise RuntimeError(f"PDF文本提取失败: {str(e)}")
-
-    @staticmethod
-    def get_pdf_info(file_path: Union[str, Path]) -> dict:
-        """
-        获取PDF文件信息
-
-        Args:
-            file_path: PDF文件路径
-
-        Returns:
-            dict: PDF文件信息
-        """
-        file_path = Path(file_path)
-        if not file_path.exists():
-            raise FileNotFoundError(f"PDF文件不存在: {file_path}")
-
-        try:
-            with open(file_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
-
-                metadata = pdf_reader.metadata or {}
-
-                return {
-                    'page_count': len(pdf_reader.pages),
-                    'title': metadata.get('/Title', ''),
-                    'author': metadata.get('/Author', ''),
-                    'subject': metadata.get('/Subject', ''),
-                    'creator': metadata.get('/Creator', ''),
-                    'producer': metadata.get('/Producer', ''),
-                    'creation_date': metadata.get('/CreationDate', ''),
-                    'modification_date': metadata.get('/ModDate', ''),
-                }
-        except Exception as e:
-            raise RuntimeError(f"PDF信息获取失败: {str(e)}")
-
-    @staticmethod
-    def extract_pages_text(file_path: Union[str, Path], pages: List[int]) -> str:
-        """
-        提取指定页面的文本
-
-        Args:
-            file_path: PDF文件路径
-            pages: 页码列表（从1开始）
-
-        Returns:
-            str: 提取的文本
-        """
-        file_path = Path(file_path)
-        if not file_path.exists():
-            raise FileNotFoundError(f"PDF文件不存在: {file_path}")
-
-        try:
-            with open(file_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
-                text_parts = []
-
-                for page_num in pages:
-                    if 1 <= page_num <= len(pdf_reader.pages):
-                        page = pdf_reader.pages[page_num - 1]
-                        page_text = page.extract_text()
-                        if page_text.strip():
-                            text_parts.append(f"--- Page {page_num} ---\n{page_text}")
-                    else:
-                        print(f"警告: 页码{page_num}超出范围")
-
-                return "\n\n".join(text_parts).strip()
-
-        except Exception as e:
-            raise RuntimeError(f"指定页面文本提取失败: {str(e)}")
+try:
+    import pdfplumber
+    PDFPLUMBER_AVAILABLE = True
+except ImportError:
+    PDFPLUMBER_AVAILABLE = False
 
 
-# 创建全局PDF解析器实例
-pdf_parser = PDFParser()
-
-
-def extract_text_from_pdf(file_obj: io.BytesIO) -> str:
+def extract_text_from_pdf(uploaded_file) -> str:
     """
-    便捷函数：从PDF文件对象提取文本
+    从上传的PDF文件中提取文本
 
     Args:
-        file_obj: PDF文件对象
+        uploaded_file: Streamlit上传的文件对象
 
     Returns:
-        str: 提取的文本
+        str: 提取的文本内容
+
+    Raises:
+        RuntimeError: PDF文本提取失败
     """
-    return pdf_parser.extract_text_from_file_obj(file_obj)
+    if not uploaded_file:
+        raise ValueError("上传的PDF文件为空")
+
+    try:
+        # 读取文件内容
+        pdf_bytes = uploaded_file.read()
+
+        # 尝试使用PyPDF2
+        if PYPDF2_AVAILABLE:
+            return _extract_with_pypdf2(pdf_bytes)
+
+        # 尝试使用pdfplumber
+        elif PDFPLUMBER_AVAILABLE:
+            return _extract_with_pdfplumber(pdf_bytes)
+
+        else:
+            raise RuntimeError(
+                "PDF解析库不可用。请安装PyPDF2或pdfplumber：\n"
+                "pip install PyPDF2\n"
+                "或\n"
+                "pip install pdfplumber"
+            )
+
+    except Exception as e:
+        raise RuntimeError(f"PDF文本提取失败: {str(e)}")
+
+
+def _extract_with_pypdf2(pdf_bytes: bytes) -> str:
+    """使用PyPDF2提取文本"""
+    import PyPDF2
+
+    pdf_stream = io.BytesIO(pdf_bytes)
+    reader = PyPDF2.PdfReader(pdf_stream)
+
+    text_content = []
+
+    for page_num, page in enumerate(reader.pages, 1):
+        try:
+            page_text = page.extract_text()
+            if page_text and page_text.strip():
+                text_content.append(f"--- 第{page_num}页 ---\n{page_text.strip()}\n")
+        except Exception as e:
+            st.warning(f"第{page_num}页提取失败: {str(e)}")
+            continue
+
+    return "\n".join(text_content)
+
+
+def _extract_with_pdfplumber(pdf_bytes: bytes) -> str:
+    """使用pdfplumber提取文本"""
+    import pdfplumber
+
+    text_content = []
+
+    with io.BytesIO(pdf_bytes) as pdf_stream:
+        try:
+            with pdfplumber.open(pdf_stream) as pdf:
+                for page_num, page in enumerate(pdf.pages, 1):
+                    try:
+                        page_text = page.extract_text()
+                        if page_text and page_text.strip():
+                            text_content.append(f"--- 第{page_num}页 ---\n{page_text.strip()}\n")
+                    except Exception as e:
+                        st.warning(f"第{page_num}页提取失败: {str(e)}")
+                        continue
+        except Exception as e:
+            st.warning(f"pdfplumber处理失败，尝试备用方法: {str(e)}")
+            # 如果pdfplumber失败，尝试简单的文本提取
+            return _fallback_text_extraction(pdf_bytes)
+
+    return "\n".join(text_content)
+
+
+def _fallback_text_extraction(pdf_bytes: bytes) -> str:
+    """备用文本提取方法"""
+    try:
+        # 尝试简单的字符串提取（适用于简单的文本PDF）
+        text = pdf_bytes.decode('utf-8', errors='ignore')
+        if text and len(text) > 50:  # 至少有一些内容
+            return f"--- PDF文本内容 ---\n{text}"
+        else:
+            return ""
+    except Exception:
+        return ""
+
+
+def get_pdf_info() -> dict:
+    """
+    获取PDF解析库的可用信息
+
+    Returns:
+        dict: 库的可用状态
+    """
+    return {
+        "pypdf2": PYPDF2_AVAILABLE,
+        "pdfplumber": PDFPLUMBER_AVAILABLE,
+        "recommendation": "PyPDF2" if PYPDF2_AVAILABLE else "pdfplumber" if PDFPLUMBER_AVAILABLE else "none"
+    }

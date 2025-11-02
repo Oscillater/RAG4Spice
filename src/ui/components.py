@@ -127,15 +127,25 @@ class TaskAnalysisComponent:
             )
 
     @staticmethod
-    def render_task_analysis_result(task_analysis: TaskAnalysis):
+    def render_task_analysis_result(task_analysis):
         """
         渲染任务分析结果
 
         Args:
-            task_analysis: 任务分析结果
+            task_analysis: 任务分析结果 (TaskAnalysis对象或字典)
         """
         st.subheader("📋 AI分析结果")
-        st.json(task_analysis.to_dict())
+
+        # 处理字典或TaskAnalysis对象
+        if hasattr(task_analysis, 'to_dict'):
+            data = task_analysis.to_dict()
+        elif isinstance(task_analysis, dict):
+            data = task_analysis
+        else:
+            st.error("❌ 任务分析结果格式错误")
+            return
+
+        st.json(data)
 
     @staticmethod
     def render_debug_info(prompt: str, response: str):
@@ -175,12 +185,12 @@ class TaskEditComponent:
         )
 
     @staticmethod
-    def render_task_list(tasks: List[Task]) -> List[Task]:
+    def render_task_list(tasks) -> List[Task]:
         """
         渲染任务列表
 
         Args:
-            tasks: 任务列表
+            tasks: 任务列表 (Task对象列表或字典列表)
 
         Returns:
             List[Task]: 更新后的任务列表
@@ -189,17 +199,30 @@ class TaskEditComponent:
 
         if not tasks:
             st.warning("📝 暂无任务，请重新分析或添加任务")
-            return tasks
+            return []
 
         st.info("📝 **每个Task对应一个独立的HSPICE文件**，包含该文件的完整仿真功能描述")
 
-        for task_idx, task in enumerate(tasks):
+        # 确保所有任务都是Task对象
+        task_objects = []
+        for task in tasks:
+            if isinstance(task, dict):
+                # 从字典创建Task对象
+                task_objects.append(Task.from_dict(task))
+            elif hasattr(task, 'title') and hasattr(task, 'id'):
+                # 已经是Task对象
+                task_objects.append(task)
+            else:
+                st.error(f"❌ 任务格式错误: {task}")
+                continue
+
+        for task_idx, task in enumerate(task_objects):
             with st.expander(f"📄 {task.title} - HSPICE任务{task.id}"):
                 updated_task = TaskEditComponent._render_single_task_edit(task, task_idx)
                 if updated_task:
-                    tasks[task_idx] = updated_task
+                    task_objects[task_idx] = updated_task
 
-        return tasks
+        return task_objects
 
     @staticmethod
     def _render_single_task_edit(task: Task, task_idx: int) -> Optional[Task]:
@@ -229,6 +252,20 @@ class TaskEditComponent:
                 key=f"task_desc_{task_idx}",
                 help="描述该HSPICE文件要实现的完整仿真功能和内容，可包含多种分析类型"
             )
+            task_knowledge = st.text_area(
+                "任务相关知识",
+                value=getattr(task, 'knowledge', ''),
+                height=80,
+                key=f"task_knowledge_{task_idx}",
+                help="文件中有关该任务的知识描述，如文件中标出的语法提示、特殊要求等"
+            )
+            additional_info = st.text_area(
+                "补充信息",
+                value=getattr(task, 'additional_info', ''),
+                height=80,
+                key=f"additional_info_{task_idx}",
+                help="用户可以添加任何相关的补充信息，如电路图描述、特殊要求、注意事项等"
+            )
 
         with col2:
             st.write(f"任务ID: {task.id}")
@@ -241,7 +278,9 @@ class TaskEditComponent:
                     id=task.id,
                     title=task_title,
                     description=task_desc,
-                    visual_info=task.visual_info
+                    additional_info=additional_info,
+                    knowledge=task_knowledge,
+                    generate_request=True  # 设置生成请求标志
                 )
                 # 存储到session state
                 st.session_state[f"generate_task_{task_idx}_data"] = updated_task
@@ -255,26 +294,18 @@ class TaskEditComponent:
                 else:
                     st.warning("至少需要保留一个HSPICE任务")
 
-        # 视觉信息输入
-        st.markdown("**🔌 该HSPICE任务的电路图视觉信息：**")
-        task_visual_info = st.text_area(
-            f"请提供{task.title}所需的电路图信息：",
-            value=task.visual_info,
-            height=100,
-            key=f"task_visual_info_{task_idx}",
-            placeholder="包括但不限于：\n- MOS管源漏栅极位置\n- 元件连接关系\n- 节点标注\n- 信号流向\n- 元件参数值\n- 电源/地连接等",
-            help="这些信息将用于生成该HSPICE文件的代码"
-        )
-
-        # 更新任务的视觉信息
-        task.visual_info = task_visual_info
-
-        return Task(
-            id=task.id,
-            title=task_title,
-            description=task_desc,
-            visual_info=task.visual_info
-        )
+        # 如果没有点击生成按钮，返回原任务（保持additional_info和knowledge不变）
+        if not st.session_state.get(f"generate_task_{task_idx}_data"):
+            return Task(
+                id=task.id,
+                title=task_title,
+                description=task_desc,
+                additional_info=getattr(task, 'additional_info', ''),
+                knowledge=getattr(task, 'knowledge', ''),
+                generate_request=getattr(task, 'generate_request', False)
+            )
+        else:
+            return None
 
     @staticmethod
     def render_add_task_button() -> bool:
@@ -311,12 +342,13 @@ class GenerationResultComponent:
     """代码生成结果组件"""
 
     @staticmethod
-    def render_generation_result(result: GenerationResult):
+    def render_generation_result(result: GenerationResult, result_index: int = 0):
         """
         渲染单个任务的生成结果
 
         Args:
             result: 生成结果
+            result_index: 结果索引（用于生成唯一key）
         """
         if not result.success:
             st.error(f"❌ {result.title} 生成失败: {result.error}")
@@ -335,12 +367,14 @@ class GenerationResultComponent:
         with tab2:
             if result.hspice_code:
                 st.code(result.hspice_code, language="spice")
-                # 提供下载按钮
+                # 提供下载按钮（使用任务ID和索引确保唯一性）
+                unique_key = f"download_task_{result.task_id}_{result_index}_{result.title.replace('.sp', '')}"
                 st.download_button(
                     label=f"📥 下载 {result.title}",
                     data=result.hspice_code,
                     file_name=result.title,
-                    mime="text/plain"
+                    mime="text/plain",
+                    key=unique_key
                 )
             else:
                 st.warning("在模型的输出中未能找到有效的HSPICE代码块。")

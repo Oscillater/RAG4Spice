@@ -9,7 +9,7 @@ import os
 from typing import Optional, Dict, Any
 
 from models.task_models import TaskAnalysis, Task, GenerationResult
-from core.llm import analyze_tasks
+# from core.llm import analyze_tasks  # 已迁移到multi_llm
 from core.retrieval import generate_task_code, retrieval_manager
 from core.multi_llm import multi_llm_manager
 from ui.components import (
@@ -48,6 +48,33 @@ class MainPage:
                 'analysis': {'connected': False, 'model': '', 'error': ''},
                 'generation': {'connected': False, 'model': '', 'error': ''}
             }
+
+        # 确保API配置方法已初始化
+        if 'api_config_method' not in st.session_state:
+            from ui.model_config_flow import APIConfigMethod
+            st.session_state.api_config_method = APIConfigMethod.ENVIRONMENT
+
+        # 确保模型相关状态已初始化
+        if 'analysis_model' not in st.session_state:
+            st.session_state.analysis_model = None
+        if 'generation_model' not in st.session_state:
+            st.session_state.generation_model = None
+        if 'selected_analysis_model' not in st.session_state:
+            st.session_state.selected_analysis_model = settings.DEFAULT_MODEL
+        if 'selected_generation_model' not in st.session_state:
+            st.session_state.selected_generation_model = settings.DEFAULT_MODEL
+        if 'api_keys' not in st.session_state:
+            st.session_state.api_keys = {}
+        if 'analysis_model_validated' not in st.session_state:
+            st.session_state.analysis_model_validated = False
+        if 'generation_model_validated' not in st.session_state:
+            st.session_state.generation_model_validated = False
+
+        # 确保自定义API配置状态已初始化
+        if 'custom_api_show_add_form' not in st.session_state:
+            st.session_state.custom_api_show_add_form = False
+        if 'custom_api_editing_config' not in st.session_state:
+            st.session_state.custom_api_editing_config = None
 
         # 初始化模型选择器
         self.model_selector = ModelSelectorComponent()
@@ -217,19 +244,19 @@ class MainPage:
                     analysis_model_id, analysis_api_key = model_configs['analysis']
 
                     # 执行任务分析
-                    task_analysis = multi_llm_manager.analyze_tasks(
+                    task_analysis_dict = multi_llm_manager.analyze_tasks(
                         analysis_model_id, analysis_api_key, extracted_text
                     )
-
+                    task_analysis_obj = TaskAnalysis.from_dict(task_analysis_dict)
                     # 保存分析结果
-                    st.session_state.task_analysis = task_analysis
+                    st.session_state.task_analysis = task_analysis_obj
 
                     # 保存调试信息
                     st.session_state.last_prompt = extracted_text
-                    st.session_state.last_response = str(task_analysis)
+                    st.session_state.last_response = str(task_analysis_dict)
 
                     # 显示分析结果
-                    analysis_component.render_task_analysis_result(task_analysis)
+                    analysis_component.render_task_analysis_result(task_analysis_obj)
 
                     # 显示调试信息
                     if hasattr(st.session_state, 'last_prompt') and hasattr(st.session_state, 'last_response'):
@@ -266,15 +293,41 @@ class MainPage:
 
         # 编辑总体描述
         edit_component = TaskEditComponent()
+        # 处理字典或TaskAnalysis对象
+        if hasattr(task_analysis, 'general_description'):
+            general_description_value = task_analysis.general_description
+        elif isinstance(task_analysis, dict):
+            general_description_value = task_analysis.get('general_description', '')
+        else:
+            general_description_value = ''
+
         general_description = edit_component.render_general_description_edit(
-            task_analysis.general_description
+            general_description_value
         )
 
         # 编辑任务列表
-        tasks = edit_component.render_task_list(task_analysis.tasks)
+        # 处理字典或TaskAnalysis对象
+        if hasattr(task_analysis, 'tasks'):
+            tasks_value = task_analysis.tasks
+        elif isinstance(task_analysis, dict):
+            tasks_value = task_analysis.get('tasks', [])
+        else:
+            tasks_value = []
+
+        tasks = edit_component.render_task_list(tasks_value)
+
+        # 更新session state中的任务列表
+        current_analysis = st.session_state.task_analysis
+        if hasattr(current_analysis, 'tasks'):
+            current_analysis.tasks = tasks
+        elif isinstance(current_analysis, dict):
+            current_analysis['tasks'] = [task.to_dict() for task in tasks]
 
         # 检查是否有生成请求
         self._check_generation_requests(tasks)
+
+        # 显示生成结果
+        self._render_generation_results()
 
         # 处理添加任务
         if tasks:
@@ -282,11 +335,44 @@ class MainPage:
                 new_task = Task(
                     id=len(tasks) + 1,
                     title=f"任务{len(tasks) + 1}.sp",
-                    description="请在此输入任务描述"
+                    description="请在此输入任务描述",
+                    additional_info="",
+                    knowledge="",
+                    generate_request=False
                 )
                 tasks.append(new_task)
-                st.session_state.task_analysis.tasks = tasks
+                # 确保session_state中的task_analysis是对象
+                current_analysis = st.session_state.task_analysis
+                if hasattr(current_analysis, 'tasks'):
+                    current_analysis.tasks = tasks
+                elif isinstance(current_analysis, dict):
+                    current_analysis['tasks'] = tasks
+                else:
+                    # 如果是其他类型，创建新的TaskAnalysis对象
+                    from models.task_models import TaskAnalysis
+                    if isinstance(current_analysis, dict):
+                        st.session_state.task_analysis = TaskAnalysis.from_dict(current_analysis)
+                    else:
+                        st.session_state.task_analysis = TaskAnalysis(
+                            general_description='',
+                            tasks=tasks
+                        )
                 st.rerun()
+
+    def _render_generation_results(self):
+        """渲染生成结果"""
+        print(f"渲染生成结果，当前数量: {len(st.session_state.generation_results)}")
+        if not st.session_state.generation_results:
+            print("没有生成结果，直接返回")
+            return
+
+        st.divider()
+        st.subheader("🎉 HSPICE代码生成结果")
+
+        # 显示所有生成结果
+        for index, result in enumerate(st.session_state.generation_results):
+            print(f"渲染结果 {index}: {result.title}, success: {result.success}")
+            GenerationResultComponent.render_generation_result(result, index)
 
     def _check_generation_requests(self, tasks: list):
         """检查代码生成请求"""
@@ -307,37 +393,80 @@ class MainPage:
         with st.spinner(f"正在生成 {task.title} 的HSPICE代码..."):
             try:
                 # 获取检索知识
-                context = retrieval_manager.retrieve_relevant_knowledge(
+                documents = retrieval_manager.retrieve_knowledge(
                     task.title + " " + task.description
                 )
+                context = retrieval_manager.format_retrieved_documents(documents)
 
                 # 获取任务分析结果
                 task_analysis = st.session_state.task_analysis
+
+                # 处理字典或TaskAnalysis对象，获取general_description
+                if hasattr(task_analysis, 'general_description'):
+                    general_description_value = task_analysis.general_description
+                elif isinstance(task_analysis, dict):
+                    general_description_value = task_analysis.get('general_description', '')
+                else:
+                    general_description_value = ''
+
+                # 获取任务知识信息
+                task_knowledge = ""
+                if hasattr(task, 'knowledge'):
+                    task_knowledge = task.knowledge
+                elif isinstance(task, dict):
+                    task_knowledge = task.get('knowledge', '')
+
+                # 获取补充信息
+                additional_info = ""
+                if hasattr(task, 'additional_info'):
+                    additional_info = task.additional_info
+                elif isinstance(task, dict):
+                    additional_info = task.get('additional_info', '')
 
                 # 生成HSPICE代码
                 analysis, hspice_code = multi_llm_manager.generate_hspice_code(
                     generation_model_id,
                     generation_api_key,
                     context,
-                    task_analysis.general_description,
-                    "",  # MOS连接信息（暂时为空）
+                    general_description_value,
+                    additional_info,  # 补充信息
                     task.description,
-                    task.title
+                    task.title,
+                    task_knowledge
                 )
 
                 # 创建生成结果
                 generation_result = GenerationResult(
                     task_id=task.id,
-                    task_title=task.title,
+                    title=task.title,
+                    description=task.description,
                     analysis=analysis,
                     hspice_code=hspice_code
                 )
 
+                print(f"创建生成结果: {generation_result.title}")
+                print(f"分析长度: {len(analysis)}, 代码长度: {len(hspice_code)}")
+                print(f"当前generation_results数量: {len(st.session_state.generation_results)}")
+
                 # 保存生成结果
                 st.session_state.generation_results.append(generation_result)
+                print(f"添加后generation_results数量: {len(st.session_state.generation_results)}")
 
                 # 重置生成请求标志
                 task.generate_request = False
+
+                # 更新session state中的任务
+                current_analysis = st.session_state.task_analysis
+                if hasattr(current_analysis, 'tasks'):
+                    for i, t in enumerate(current_analysis.tasks):
+                        if t.id == task.id:
+                            current_analysis.tasks[i] = task
+                            break
+                elif isinstance(current_analysis, dict):
+                    for i, t in enumerate(current_analysis['tasks']):
+                        if t['id'] == task.id:
+                            current_analysis['tasks'][i] = task.to_dict()
+                            break
 
                 # 显示成功消息
                 SuccessDisplayComponent.render_success(f"成功生成 {task.title} 的HSPICE代码")

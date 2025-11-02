@@ -72,35 +72,64 @@ def extract_json_from_text(text: str) -> Union[Dict, None]:
     try:
         # 方法1: 直接解析整个响应（如果是纯JSON）
         cleaned_text = text.strip().replace('\r\n', '\n')
+        print(f"尝试方法1: 直接解析整个文本")
         try:
-            return json.loads(cleaned_text)
-        except json.JSONDecodeError:
-            pass
+            result = json.loads(cleaned_text)
+            print("方法1成功：直接解析JSON")
+            return result
+        except json.JSONDecodeError as e:
+            print(f"方法1失败: {e}")
 
         # 方法2: 查找JSON代码块
         if "```json" in cleaned_text:
+            print("尝试方法2: 查找JSON代码块")
             json_match = re.search(r'```json\s*\n(.*?)\n```', cleaned_text, re.DOTALL)
             if json_match:
                 json_str = json_match.group(1).strip()
-                return json.loads(json_str)
+                print(f"找到JSON代码块: {json_str[:200]}...")
+                try:
+                    result = json.loads(json_str)
+                    print("方法2成功：解析JSON代码块")
+                    return result
+                except json.JSONDecodeError as e:
+                    print(f"方法2失败: {e}")
 
         # 方法3: 查找通用代码块中的JSON
         if "```" in cleaned_text:
+            print("尝试方法3: 查找通用代码块中的JSON")
             json_match = re.search(r'```\s*\n(.*?\{.*?\}.*?)\n```', cleaned_text, re.DOTALL)
             if json_match:
                 json_str = json_match.group(1).strip()
-                return json.loads(json_str)
+                print(f"找到通用代码块: {json_str[:200]}...")
+                try:
+                    result = json.loads(json_str)
+                    print("方法3成功：解析通用代码块")
+                    return result
+                except json.JSONDecodeError as e:
+                    print(f"方法3失败: {e}")
 
         # 方法4: 查找第一个{到最后一个}
+        print("尝试方法4: 查找第一个{到最后一个}")
         json_start = cleaned_text.find('{')
         json_end = cleaned_text.rfind('}') + 1
         if json_start != -1 and json_end != 0:
             json_str = cleaned_text[json_start:json_end]
-            return json.loads(json_str)
+            print(f"提取的完整JSON内容:")
+            print("=" * 50)
+            print(json_str)
+            print("=" * 50)
+            try:
+                result = json.loads(json_str)
+                print("方法4成功：解析JSON片段")
+                return result
+            except json.JSONDecodeError as e:
+                print(f"方法4失败: {e}")
 
+        print("所有方法都失败了")
         return None
 
-    except (json.JSONDecodeError, AttributeError, IndexError):
+    except (json.JSONDecodeError, AttributeError, IndexError) as e:
+        print(f"extract_json_from_text异常: {e}")
         return None
 
 
