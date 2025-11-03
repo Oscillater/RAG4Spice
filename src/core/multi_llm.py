@@ -1,404 +1,95 @@
 """
-多模型LLM客户端
+统一LLM客户端
 
-统一的API客户端，支持多种AI模型的调用。
-包括中国和国际的主流大语言模型。
+完全基于HTTP API的统一客户端，支持所有AI模型。
+官方模型自动配置URL，用户只需输入API密钥。
+自定义模型用户可配置URL和API密钥。
 """
 
-import os
-import time
-import json
 import requests
-from typing import Dict, List, Any, Optional, Union, Tuple
-from abc import ABC, abstractmethod
-
-import google.generativeai as genai
-import openai
-from anthropic import Anthropic
-
-from config.models import AIModel, ModelProvider, model_config
+import time
+from typing import Dict, Any, Optional
+from config.models import model_config
 from config.settings import settings
 from config.custom_api import custom_api_manager, CustomAPIConfig
 from utils.text_processing import extract_json_from_text, safe_error_message, normalize_line_endings
 
 
-class BaseLLMClient(ABC):
-    """LLM客户端基类"""
+def get_api_key_from_session(model_id: str) -> Optional[str]:
+    """
+    从session state获取API密钥
 
-    def __init__(self, model: AIModel, api_key: str):
-        self.model = model
+    Args:
+        model_id: 模型ID
+
+    Returns:
+        str: API密钥，如果未找到则返回None
+    """
+    try:
+        import streamlit as st
+        # 直接查找模型ID
+        if 'api_keys' in st.session_state and model_id in st.session_state.api_keys:
+            return st.session_state.api_keys[model_id]
+        return None
+    except Exception:
+        return None
+
+
+class UnifiedLLMClient:
+    """统一的LLM客户端"""
+
+    def __init__(self, model_id: str, api_key: str, base_url: str = None):
+        """
+        初始化统一客户端
+
+        Args:
+            model_id: 模型ID
+            api_key: API密钥
+            base_url: API基础URL
+        """
+        self.model_id = model_id
         self.api_key = api_key
+        self.base_url = base_url
 
-    @abstractmethod
-    def generate_content(self, prompt: str, **kwargs) -> Any:
-        """生成内容的抽象方法"""
-        pass
+        # 如果没有提供base_url，尝试从模型配置获取
+        if not self.base_url:
+            model = model_config.get_model_by_id(model_id)
+            if model:
+                # 获取自动配置的URL
+                auto_config = model_config.get_auto_config_for_model(model_id)
+                self.base_url = auto_config.get('base_url') if auto_config else None
 
-    @abstractmethod
-    def parse_response(self, response: Any) -> str:
-        """解析响应的抽象方法"""
-        pass
-
-
-class GoogleLLMClient(BaseLLMClient):
-    """Google Gemini客户端"""
-
-    def __init__(self, model: AIModel, api_key: str):
-        super().__init__(model, api_key)
-        genai.configure(api_key=api_key)
-        self.client = genai.GenerativeModel(model.model_id)
+        if not self.base_url:
+            raise ValueError(f"无法确定模型 {model_id} 的API地址")
 
     def generate_content(self, prompt: str, **kwargs) -> Any:
-        """生成内容"""
-        timeout = kwargs.get('timeout', settings.API_TIMEOUT)
-        return self.client.generate_content(
-            prompt,
-            request_options={"timeout": timeout}
-        )
+        """
+        生成内容 - 统一使用OpenAI兼容格式
 
-    def parse_response(self, response: Any) -> str:
-        """解析响应"""
-        return response.text if response and response.text else ""
+        Args:
+            prompt: 提示词
+            **kwargs: 其他参数
 
-
-class OpenAILLMClient(BaseLLMClient):
-    """OpenAI客户端"""
-
-    def __init__(self, model: AIModel, api_key: str):
-        super().__init__(model, api_key)
-        self.client = openai.OpenAI(api_key=api_key)
-
-    def generate_content(self, prompt: str, **kwargs) -> Any:
-        """生成内容"""
-        timeout = kwargs.get('timeout', settings.API_TIMEOUT)
-        max_tokens = kwargs.get('max_tokens', self.model.max_tokens)
-        temperature = kwargs.get('temperature', self.model.temperature)
-
-        return self.client.chat.completions.create(
-            model=self.model.model_id,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            temperature=temperature,
-            timeout=timeout
-        )
-
-    def parse_response(self, response: Any) -> str:
-        """解析响应"""
-        if response and response.choices:
-            return response.choices[0].message.content
-        return ""
-
-
-class AnthropicLLMClient(BaseLLMClient):
-    """Anthropic Claude客户端"""
-
-    def __init__(self, model: AIModel, api_key: str):
-        super().__init__(model, api_key)
-        self.client = Anthropic(api_key=api_key)
-
-    def generate_content(self, prompt: str, **kwargs) -> Any:
-        """生成内容"""
-        max_tokens = kwargs.get('max_tokens', self.model.max_tokens or 4096)
-        temperature = kwargs.get('temperature', self.model.temperature)
-
-        return self.client.messages.create(
-            model=self.model.model_id,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-    def parse_response(self, response: Any) -> str:
-        """解析响应"""
-        if response and response.content:
-            return response.content[0].text
-        return ""
-
-
-class AlibabaLLMClient(BaseLLMClient):
-    """阿里云通义千问客户端"""
-
-    def __init__(self, model: AIModel, api_key: str):
-        super().__init__(model, api_key)
-        self.base_url = model.base_url
-        self.headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-
-    def generate_content(self, prompt: str, **kwargs) -> Any:
-        """生成内容"""
-        data = {
-            "model": self.model.model_id,
-            "input": {
-                "messages": [{"role": "user", "content": prompt}]
-            },
-            "parameters": {
-                "max_tokens": kwargs.get('max_tokens', self.model.max_tokens),
-                "temperature": kwargs.get('temperature', self.model.temperature)
-            }
-        }
-
-        response = requests.post(
-            f"{self.base_url}/services/aigc/text-generation/generation",
-            headers=self.headers,
-            json=data,
-            timeout=kwargs.get('timeout', settings.API_TIMEOUT)
-        )
-        response.raise_for_status()
-        return response.json()
-
-    def parse_response(self, response: Any) -> str:
-        """解析响应"""
-        if isinstance(response, dict):
-            output = response.get("output", {})
-            if "text" in output:
-                return output["text"]
-            elif "choices" in output:
-                return output["choices"][0]["message"]["content"]
-        return ""
-
-
-class BaiduLLMClient(BaseLLMClient):
-    """百度文心一言客户端"""
-
-    def __init__(self, model: AIModel, api_key: str):
-        super().__init__(model, api_key)
-        self.base_url = model.base_url
-        # 百度需要获取access_token
-        self.access_token = self._get_access_token()
-
-    def _get_access_token(self) -> str:
-        """获取百度API的access_token"""
-        url = "https://aip.baidubce.com/oauth/2.0/token"
-        params = {
-            "grant_type": "client_credentials",
-            "client_id": self.api_key,
-            "client_secret": os.getenv("BAIDU_SECRET_KEY", "")
-        }
-        response = requests.post(url, params=params)
-        response.raise_for_status()
-        return response.json()["access_token"]
-
-    def generate_content(self, prompt: str, **kwargs) -> Any:
-        """生成内容"""
-        data = {
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": kwargs.get('temperature', self.model.temperature),
-            "max_output_tokens": kwargs.get('max_tokens', self.model.max_tokens)
-        }
-
-        endpoint_map = {
-            "ernie-bot-4": "chat/completions_pro",
-            "ernie-bot-turbo": "chat/completions"
-        }
-        endpoint = endpoint_map.get(self.model.model_id, "chat/completions")
-
-        url = f"{self.base_url}/{endpoint}?access_token={self.access_token}"
-        response = requests.post(url, json=data, timeout=kwargs.get('timeout', settings.API_TIMEOUT))
-        response.raise_for_status()
-        return response.json()
-
-    def parse_response(self, response: Any) -> str:
-        """解析响应"""
-        if isinstance(response, dict) and "result" in response:
-            return response["result"]
-        return ""
-
-
-class ZhipuLLMClient(BaseLLMClient):
-    """智谱清言客户端"""
-
-    def __init__(self, model: AIModel, api_key: str):
-        super().__init__(model, api_key)
-        self.base_url = model.base_url
-        self.headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-
-    def generate_content(self, prompt: str, **kwargs) -> Any:
-        """生成内容"""
-        data = {
-            "model": self.model.model_id,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": kwargs.get('max_tokens', self.model.max_tokens),
-            "temperature": kwargs.get('temperature', self.model.temperature)
-        }
-
-        response = requests.post(
-            f"{self.base_url}/chat/completions",
-            headers=self.headers,
-            json=data,
-            timeout=kwargs.get('timeout', settings.API_TIMEOUT)
-        )
-        response.raise_for_status()
-        return response.json()
-
-    def parse_response(self, response: Any) -> str:
-        """解析响应"""
-        if isinstance(response, dict) and "choices" in response:
-            return response["choices"][0]["message"]["content"]
-        return ""
-
-
-class MoonshotLLMClient(BaseLLMClient):
-    """月之暗面Kimi客户端"""
-
-    def __init__(self, model: AIModel, api_key: str):
-        super().__init__(model, api_key)
-        self.client = openai.OpenAI(
-            api_key=api_key,
-            base_url=model.base_url
-        )
-
-    def generate_content(self, prompt: str, **kwargs) -> Any:
-        """生成内容"""
-        timeout = kwargs.get('timeout', settings.API_TIMEOUT)
-        max_tokens = kwargs.get('max_tokens', self.model.max_tokens)
-        temperature = kwargs.get('temperature', self.model.temperature)
-
-        return self.client.chat.completions.create(
-            model=self.model.model_id,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            temperature=temperature,
-            timeout=timeout
-        )
-
-    def parse_response(self, response: Any) -> str:
-        """解析响应"""
-        if response and response.choices:
-            return response.choices[0].message.content
-        return ""
-
-
-class DeepSeekLLMClient(BaseLLMClient):
-    """DeepSeek客户端"""
-
-    def __init__(self, model: AIModel, api_key: str):
-        super().__init__(model, api_key)
-        self.client = openai.OpenAI(
-            api_key=api_key,
-            base_url=model.base_url
-        )
-
-    def generate_content(self, prompt: str, **kwargs) -> Any:
-        """生成内容"""
-        timeout = kwargs.get('timeout', settings.API_TIMEOUT)
-        max_tokens = kwargs.get('max_tokens', self.model.max_tokens)
-        temperature = kwargs.get('temperature', self.model.temperature)
-
-        return self.client.chat.completions.create(
-            model=self.model.model_id,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            temperature=temperature,
-            timeout=timeout
-        )
-
-    def parse_response(self, response: Any) -> str:
-        """解析响应"""
-        if response and response.choices:
-            return response.choices[0].message.content
-        return ""
-
-
-class MistralLLMClient(BaseLLMClient):
-    """Mistral AI客户端"""
-
-    def __init__(self, model: AIModel, api_key: str):
-        super().__init__(model, api_key)
-        self.client = openai.OpenAI(
-            api_key=api_key,
-            base_url=model.base_url
-        )
-
-    def generate_content(self, prompt: str, **kwargs) -> Any:
-        """生成内容"""
-        timeout = kwargs.get('timeout', settings.API_TIMEOUT)
-        max_tokens = kwargs.get('max_tokens', self.model.max_tokens)
-        temperature = kwargs.get('temperature', self.model.temperature)
-
-        return self.client.chat.completions.create(
-            model=self.model.model_id,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            temperature=temperature,
-            timeout=timeout
-        )
-
-    def parse_response(self, response: Any) -> str:
-        """解析响应"""
-        if response and response.choices:
-            return response.choices[0].message.content
-        return ""
-
-
-class CohereLLMClient(BaseLLMClient):
-    """Cohere客户端"""
-
-    def __init__(self, model: AIModel, api_key: str):
-        super().__init__(model, api_key)
-        import cohere
-        self.client = cohere.Client(api_key=api_key)
-
-    def generate_content(self, prompt: str, **kwargs) -> Any:
-        """生成内容"""
-        max_tokens = kwargs.get('max_tokens', self.model.max_tokens)
-        temperature = kwargs.get('temperature', self.model.temperature)
-
-        return self.client.generate(
-            model=self.model.model_id,
-            prompt=prompt,
-            max_tokens=max_tokens,
-            temperature=temperature
-        )
-
-    def parse_response(self, response: Any) -> str:
-        """解析响应"""
-        if hasattr(response, 'generations') and response.generations:
-            return response.generations[0].text
-        return ""
-
-
-class CustomAPILLMClient(BaseLLMClient):
-    """自定义API客户端"""
-
-    def __init__(self, custom_config: CustomAPIConfig, model_id: str, api_key: str):
-        # 创建一个临时的AIModel对象用于兼容
-        temp_model = AIModel(
-            provider=ModelProvider.OPENAI,  # 使用OpenAI格式
-            model_id=model_id,
-            display_name=f"{custom_config.provider_name}: {model_id}",
-            api_key_env="",  # 不使用环境变量
-            base_url=custom_config.base_url,
-            max_tokens=4096,
-            temperature=0.7,
-            supports_streaming=True,
-            is_chinese=False,
-            description=f"自定义API: {custom_config.description}"
-        )
-        super().__init__(temp_model, api_key)
-        self.custom_config = custom_config
-
-    def generate_content(self, prompt: str, **kwargs) -> Any:
-        """生成内容"""
-        # 使用OpenAI兼容格式调用自定义API
+        Returns:
+            Any: API响应
+        """
+        # 构建请求头
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
 
+        # 构建请求数据
         data = {
-            "model": self.model.model_id,
+            "model": self.model_id,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": kwargs.get('max_tokens', self.model.max_tokens),
-            "temperature": kwargs.get('temperature', self.model.temperature)
+            "max_tokens": kwargs.get('max_tokens', 4096),
+            "temperature": kwargs.get('temperature', 0.7)
         }
 
+        # 发送请求
         response = requests.post(
-            f"{self.model.base_url.rstrip('/')}/chat/completions",
+            f"{self.base_url.rstrip('/')}/chat/completions",
             headers=headers,
             json=data,
             timeout=kwargs.get('timeout', settings.API_TIMEOUT)
@@ -407,7 +98,15 @@ class CustomAPILLMClient(BaseLLMClient):
         return response.json()
 
     def parse_response(self, response: Any) -> str:
-        """解析响应"""
+        """
+        解析响应 - 统一解析OpenAI格式
+
+        Args:
+            response: API响应
+
+        Returns:
+            str: 解析后的文本内容
+        """
         if isinstance(response, dict) and "choices" in response:
             choices = response["choices"]
             if choices and "message" in choices[0]:
@@ -416,16 +115,30 @@ class CustomAPILLMClient(BaseLLMClient):
 
 
 class MultiLLMManager:
-    """多模型LLM管理器"""
+    """多模型LLM管理器 - 简化版"""
 
     def __init__(self):
         """初始化多模型管理器"""
         self.clients = {}
-        self.current_model = None
-        self.current_api_key = None
 
-    def get_client(self, model_id: str, api_key: str) -> BaseLLMClient:
-        """获取模型客户端"""
+    def get_client(self, model_id: str, api_key: str = None) -> UnifiedLLMClient:
+        """
+        获取模型客户端
+
+        Args:
+            model_id: 模型ID
+            api_key: API密钥（可选，如果未提供则从session state获取）
+
+        Returns:
+            UnifiedLLMClient: 统一的客户端实例
+        """
+        # 如果没有提供api_key，尝试从session state获取
+        if not api_key:
+            api_key = get_api_key_from_session(model_id)
+
+        if not api_key:
+            raise ValueError(f"未找到模型 {model_id} 的API密钥，请先在界面中配置")
+
         cache_key = f"{model_id}:{api_key[:8]}"
 
         if cache_key not in self.clients:
@@ -433,39 +146,45 @@ class MultiLLMManager:
             if model_id.startswith("custom:"):
                 client = self._create_custom_client(model_id, api_key)
             else:
-                model = model_config.get_model_by_id(model_id)
-                if not model:
-                    raise ValueError(f"不支持的模型: {model_id}")
-
-                client = self._create_client(model, api_key)
+                client = self._create_official_client(model_id, api_key)
 
             self.clients[cache_key] = client
 
         return self.clients[cache_key]
 
-    def _create_client(self, model: AIModel, api_key: str) -> BaseLLMClient:
-        """创建客户端实例"""
-        client_map = {
-            ModelProvider.GOOGLE: GoogleLLMClient,
-            ModelProvider.OPENAI: OpenAILLMClient,
-            ModelProvider.ANTHROPIC: AnthropicLLMClient,
-            ModelProvider.ALIBABA: AlibabaLLMClient,
-            ModelProvider.BAIDU: BaiduLLMClient,
-            ModelProvider.ZHIPU: ZhipuLLMClient,
-            ModelProvider.MOONSHOT: MoonshotLLMClient,
-            ModelProvider.DEEPSEEK: DeepSeekLLMClient,
-            ModelProvider.MISTRAL: MistralLLMClient,
-            ModelProvider.COHERE: CohereLLMClient,
-        }
+    def _create_official_client(self, model_id: str, api_key: str) -> UnifiedLLMClient:
+        """
+        创建官方模型客户端
 
-        client_class = client_map.get(model.provider)
-        if not client_class:
-            raise ValueError(f"不支持的模型提供商: {model.provider}")
+        Args:
+            model_id: 模型ID
+            api_key: API密钥
 
-        return client_class(model, api_key)
+        Returns:
+            UnifiedLLMClient: 客户端实例
+        """
+        # 获取官方模型的自动配置
+        auto_config = model_config.get_auto_config_for_model(model_id)
+        if not auto_config:
+            raise ValueError(f"不支持的官方模型: {model_id}")
 
-    def _create_custom_client(self, model_id: str, api_key: str) -> BaseLLMClient:
-        """创建自定义API客户端"""
+        base_url = auto_config.get('base_url')
+        if not base_url:
+            raise ValueError(f"官方模型 {model_id} 未配置API地址")
+
+        return UnifiedLLMClient(model_id, api_key, base_url)
+
+    def _create_custom_client(self, model_id: str, api_key: str) -> UnifiedLLMClient:
+        """
+        创建自定义API客户端
+
+        Args:
+            model_id: 模型ID (格式: custom:provider_name:model_name)
+            api_key: API密钥
+
+        Returns:
+            UnifiedLLMClient: 客户端实例
+        """
         # 解析模型ID: custom:provider_name:model_name
         parts = model_id.split(":", 2)
         if len(parts) != 3:
@@ -485,13 +204,13 @@ class MultiLLMManager:
         if model_name not in custom_config.models:
             raise ValueError(f"模型 {model_name} 不在 {provider_name} 的支持列表中")
 
-        return CustomAPILLMClient(custom_config, model_name, api_key)
+        return UnifiedLLMClient(model_name, api_key, custom_config.base_url)
 
     def generate_with_retry(
         self,
         model_id: str,
-        api_key: str,
-        prompt: str,
+        api_key: str = None,
+        prompt: str = "",
         timeout: int = None,
         max_retries: int = None,
         **kwargs
@@ -501,7 +220,7 @@ class MultiLLMManager:
 
         Args:
             model_id: 模型ID
-            api_key: API密钥
+            api_key: API密钥（可选，如果未提供则从session state获取）
             prompt: 提示词
             timeout: 超时时间
             max_retries: 最大重试次数
@@ -543,13 +262,13 @@ class MultiLLMManager:
                 else:
                     raise RuntimeError(f"API调用失败，已重试{max_retries}次: {str(e)}")
 
-    def analyze_tasks(self, model_id: str, api_key: str, ocr_text: str) -> Dict[str, Any]:
+    def analyze_tasks(self, model_id: str, api_key: str = None, ocr_text: str = "") -> Dict[str, Any]:
         """
         分析任务，将实验要求分解为多个HSPICE文件
 
         Args:
             model_id: 模型ID
-            api_key: API密钥
+            api_key: API密钥（可选，如果未提供则从session state获取）
             ocr_text: OCR提取的文本
 
         Returns:
@@ -768,20 +487,20 @@ class MultiLLMManager:
     def generate_hspice_code(
         self,
         model_id: str,
-        api_key: str,
-        context: str,
-        requirements: str,
-        additional_info: str,
-        task_description: str,
-        filename: str,
+        api_key: str = None,
+        context: str = "",
+        requirements: str = "",
+        additional_info: str = "",
+        task_description: str = "",
+        filename: str = "",
         task_knowledge: str = ""
-    ) -> Tuple[str, str]:
+    ) -> tuple[str, str]:
         """
         生成HSPICE代码
 
         Args:
             model_id: 模型ID
-            api_key: API密钥
+            api_key: API密钥（可选，如果未提供则从session state获取）
             context: 检索到的知识上下文
             requirements: 实验要求
             additional_info: 补充信息（用户添加的任何相关内容）
@@ -863,7 +582,7 @@ class MultiLLMManager:
         except Exception as e:
             raise RuntimeError(f"HSPICE代码生成失败: {str(e)}")
 
-    def _parse_llm_output(self, response_text: str) -> Tuple[str, str]:
+    def _parse_llm_output(self, response_text: str) -> tuple[str, str]:
         """解析LLM输出，分离分析和代码"""
         analysis = ""
         hspice_code = ""

@@ -163,3 +163,6 @@ RAG4Spice/
 
 
 
+ 1. 拆分 src/ui/pages.py - 最大文件，职责混合
+
+  3. 合并PDF解析 - 明显重复

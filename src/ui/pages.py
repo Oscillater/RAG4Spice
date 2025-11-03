@@ -49,10 +49,9 @@ class MainPage:
                 'generation': {'connected': False, 'model': '', 'error': ''}
             }
 
-        # 确保API配置方法已初始化
+        # 确保API配置方法已初始化（现在只有网页输入）
         if 'api_config_method' not in st.session_state:
-            from ui.model_config_flow import APIConfigMethod
-            st.session_state.api_config_method = APIConfigMethod.ENVIRONMENT
+            st.session_state.api_config_method = "web_input"
 
         # 确保模型相关状态已初始化
         if 'analysis_model' not in st.session_state:
@@ -90,19 +89,12 @@ class MainPage:
         else:
             st.success("✅ Tesseract OCR已配置")
 
-        # API密钥信息（不再是警告，只是提示）
-        if validation_status["has_any_api_key"]:
-            configured_count = sum(1 for key in validation_status.get("api_keys", []) if key["has_key"])
-            if configured_count > 0:
-                st.success(f"✅ 已在环境变量中配置 {configured_count} 个AI模型")
-        else:
-            st.info("💡 **AI模型配置提示**")
-            st.write("未在环境变量中检测到API密钥，您可以通过侧边栏配置任何支持的AI模型。")
-            st.write("🔧 **支持的模型提供商包括：**")
-            st.write("- Google Gemini, OpenAI, Anthropic Claude")
-            st.write("- 阿里云通义千问, 百度文心一言, 智谱清言")
-            st.write("- 月之暗面Kimi, DeepSeek, Mistral AI, Cohere")
-            st.info("👉 请在侧边栏完成AI模型配置后开始使用")
+        # API配置提示（简化版）
+        st.info("💡 **AI模型配置提示**")
+        st.write("所有AI模型都通过网页界面配置，支持官方模型和自定义API。")
+        st.write("🔧 **官方模型**：自动配置URL，只需输入API密钥")
+        st.write("🔧 **自定义API**：类似Cherry Studio，完整配置URL和密钥")
+        st.info("👉 请在侧边栏完成AI模型配置后开始使用")
 
     def _render_api_connection_status(self):
         """渲染API连接状态"""

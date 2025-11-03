@@ -36,6 +36,9 @@ class AIModel:
     supports_streaming: bool = True
     is_chinese: bool = False
     description: str = ""
+    # 新增：智能预配置支持
+    is_official_model: bool = True  # 是否为官方预配置模型
+    auto_config_url: Optional[str] = None  # 自动配置的URL
 
     def get_env_key(self) -> str:
         """获取环境变量键名"""
@@ -45,6 +48,31 @@ class AIModel:
         """获取显示名称"""
         chinese_flag = "🇨🇳" if self.is_chinese else "🌍"
         return f"{chinese_flag} {self.display_name}"
+
+    def get_auto_config_url(self) -> Optional[str]:
+        """获取自动配置URL"""
+        if self.auto_config_url:
+            return self.auto_config_url
+        # 为官方模型提供默认URL
+        if self.is_official_model:
+            return self._get_default_url()
+        return self.base_url
+
+    def _get_default_url(self) -> Optional[str]:
+        """获取官方模型的默认URL"""
+        url_mapping = {
+            ModelProvider.GOOGLE: "https://generativelanguage.googleapis.com/v1beta",
+            ModelProvider.OPENAI: "https://api.openai.com/v1",
+            ModelProvider.ANTHROPIC: "https://api.anthropic.com",
+            ModelProvider.ALIBABA: "https://dashscope.aliyuncs.com/api/v1",
+            ModelProvider.BAIDU: "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop",
+            ModelProvider.ZHIPU: "https://open.bigmodel.cn/api/paas/v4",
+            ModelProvider.MOONSHOT: "https://api.moonshot.cn/v1",
+            ModelProvider.DEEPSEEK: "https://api.deepseek.com",
+            ModelProvider.MISTRAL: "https://api.mistral.ai/v1",
+            ModelProvider.COHERE: "https://api.cohere.com/v1",
+        }
+        return url_mapping.get(self.provider)
 
 
 class ModelConfig:
@@ -356,6 +384,40 @@ class ModelConfig:
             "moonshot-v1-8k",     # Kimi
             "deepseek-chat",      # DeepSeek
         ]
+
+    @classmethod
+    def is_official_model(cls, model_id: str) -> bool:
+        """判断是否为官方预配置模型"""
+        model = cls.get_model_by_id(model_id)
+        return model.is_official_model if model else False
+
+    @classmethod
+    def get_auto_config_for_model(cls, model_id: str) -> Dict[str, Any]:
+        """获取模型的自动配置信息"""
+        model = cls.get_model_by_id(model_id)
+        if not model or not model.is_official_model:
+            return {}
+
+        return {
+            "model_id": model.model_id,
+            "display_name": model.display_name,
+            "provider": model.provider.value,
+            "base_url": model.get_auto_config_url(),
+            "max_tokens": model.max_tokens,
+            "temperature": model.temperature,
+            "supports_streaming": model.supports_streaming,
+            "description": model.description,
+            "is_chinese": model.is_chinese
+        }
+
+    @classmethod
+    def get_official_models_list(cls) -> List[Dict[str, Any]]:
+        """获取所有官方模型的配置信息列表"""
+        official_models = []
+        for model_id, model in cls.SUPPORTED_MODELS.items():
+            if model.is_official_model:
+                official_models.append(cls.get_auto_config_for_model(model_id))
+        return official_models
 
 
 # 创建全局配置实例

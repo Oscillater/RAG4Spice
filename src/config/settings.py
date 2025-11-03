@@ -41,7 +41,7 @@ class Settings:
     LLM_PRO_MODEL: str = "gemini-2.5-flash"
     LLM_FLASH_MODEL: str = "gemini-2.5-flash"
 
-    # 向后兼容：保留Google API配置，但不再特殊处理
+    # 向后兼容：保留Google API配置（仅用于导入现有配置）
     GOOGLE_API_KEY: Optional[str] = os.getenv("GOOGLE_API_KEY")
 
     # 应用配置

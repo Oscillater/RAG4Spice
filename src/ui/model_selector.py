@@ -4,7 +4,6 @@
 提供用户友好的模型选择和API密钥输入界面。
 """
 
-import os
 import streamlit as st
 from typing import Optional, Tuple, Dict
 
@@ -90,71 +89,67 @@ class ModelSelectorComponent:
             key=f"{config_type}_model_selector"
         )
 
+        # 检查是否为官方模型，如果是则显示自动配置提示
+        model = model_config.get_model_by_id(selected_model_id)
+        if model and model_config.is_official_model(selected_model_id):
+            auto_config = model_config.get_auto_config_for_model(selected_model_id)
+            if auto_config:
+                st.success(f"✅ 官方模型 - 已自动配置参数")
+                if auto_config.get('base_url'):
+                    st.info(f"🔗 API地址: `{auto_config['base_url']}`")
+                if auto_config.get('is_google_model'):
+                    st.info("🔧 Google模型 - 使用SDK连接，无需URL配置")
+
         # 显示模型信息
-        with st.expander(f"📋 {model_config.get_model_by_id(selected_model_id).display_name} 详细信息", expanded=False):
+        with st.expander(f"📋 {model.display_name} 详细信息", expanded=False):
             self._render_model_info(selected_model_id)
 
-        # API密钥输入
-        api_key = self._render_api_key_input_for_model(selected_model_id, config_type)
+        # API密钥输入（简化版）
+        api_key = self._render_simple_api_key_input(selected_model_id, config_type)
 
         # 验证配置
         self._validate_single_model_config(config_type, selected_model_id, api_key)
 
         return selected_model_id, api_key
 
-    def _render_api_key_input_for_model(self, model_id: str, config_type: str) -> str:
-        """为特定模型类型渲染API密钥输入"""
+    def _render_simple_api_key_input(self, model_id: str, config_type: str) -> str:
+        """简化的API密钥输入 - 完全基于web端，不再读取本地环境变量"""
         model = model_config.get_model_by_id(model_id)
         if not model:
             return ""
 
-        # 检查环境变量中是否已有密钥
-        env_key = model.get_env_key()
-        env_api_key = os.getenv(env_key)
-
+        session_key = f"{config_type}_{model_id}"
         api_key = ""
-        if env_api_key:
-            st.success(f"✅ 已检测到环境变量 `{env_key}` 中的API密钥")
-            api_key = env_api_key
+
+        # 检查会话状态中是否已保存
+        if session_key in st.session_state.api_keys:
+            saved_key = st.session_state.api_keys[session_key]
+            api_key = saved_key
             st.text_input(
-                "API密钥 (已从环境变量加载)",
-                value="*" * 20 + api_key[-4:] if len(api_key) > 4 else "*",
+                "API密钥",
+                value="*" * 20 + saved_key[-4:] if len(saved_key) > 4 else "*",
                 type="password",
-                disabled=True,
-                key=f"{config_type}_api_key_env_{model_id}"
+                key=f"{config_type}_api_key_saved_{model_id}",
+                help="API密钥已保存在当前会话中"
             )
+
+            if st.button(f"清除{model.display_name}的API密钥", key=f"{config_type}_clear_{model_id}"):
+                del st.session_state.api_keys[session_key]
+                st.rerun()
         else:
-            st.warning(f"⚠️ 未检测到环境变量 `{env_key}`，请手动输入API密钥")
+            # 简化的API密钥输入
+            api_key = st.text_input(
+                "API密钥",
+                type="password",
+                key=f"{config_type}_api_key_input_{model_id}",
+                help=f"请输入 {model.provider.value.upper()} 的API密钥"
+            )
 
-            # 检查会话状态中是否已保存
-            session_key = f"{config_type}_{model_id}"
-            if session_key in st.session_state.api_keys:
-                saved_key = st.session_state.api_keys[session_key]
-                api_key = saved_key
-                st.text_input(
-                    "API密钥",
-                    value="*" * 20 + saved_key[-4:] if len(saved_key) > 4 else "*",
-                    type="password",
-                    key=f"{config_type}_api_key_saved_{model_id}",
-                    help="API密钥已保存在当前会话中"
-                )
-
-                if st.button(f"清除{model.display_name}的API密钥", key=f"{config_type}_clear_{model_id}"):
-                    del st.session_state.api_keys[session_key]
-                    st.rerun()
-            else:
-                api_key = st.text_input(
-                    "API密钥",
-                    type="password",
-                    key=f"{config_type}_api_key_input_{model_id}",
-                    help=f"请输入 {model.provider.value.upper()} 的API密钥"
-                )
-
-                # 保存到会话状态
-                if api_key and st.button(f"保存{model.display_name}的API密钥", key=f"{config_type}_save_{model_id}"):
-                    st.session_state.api_keys[session_key] = api_key
-                    st.success("API密钥已保存到当前会话")
-                    st.rerun()
+            # 保存到会话状态
+            if api_key and st.button(f"保存{model.display_name}的API密钥", key=f"{config_type}_save_{model_id}"):
+                st.session_state.api_keys[session_key] = api_key
+                st.success("API密钥已保存到当前会话")
+                st.rerun()
 
         return api_key
 
@@ -247,92 +242,6 @@ class ModelSelectorComponent:
                 st.write("**描述**")
                 st.info(model.description)
 
-    def _render_api_key_input(self, model_id: str) -> str:
-        """渲染API密钥输入"""
-        model = model_config.get_model_by_id(model_id)
-        if not model:
-            return ""
-
-        st.write("**API密钥配置**")
-
-        # 检查环境变量中是否已有密钥
-        env_key = model.get_env_key()
-        env_api_key = os.getenv(env_key)
-
-        api_key = ""
-        if env_api_key:
-            st.success(f"✅ 已检测到环境变量 `{env_key}` 中的API密钥")
-            api_key = env_api_key
-            st.text_input(
-                "API密钥 (已从环境变量加载)",
-                value="*" * 20 + api_key[-4:] if len(api_key) > 4 else "*",
-                type="password",
-                disabled=True,
-                key=f"api_key_env_{model_id}"
-            )
-        else:
-            st.warning(f"⚠️ 未检测到环境变量 `{env_key}`，请手动输入API密钥")
-
-            # 检查会话状态中是否已保存
-            if model_id in st.session_state.api_keys:
-                saved_key = st.session_state.api_keys[model_id]
-                api_key = saved_key
-                st.text_input(
-                    "API密钥",
-                    value="*" * 20 + saved_key[-4:] if len(saved_key) > 4 else "*",
-                    type="password",
-                    key=f"api_key_saved_{model_id}",
-                    help="API密钥已保存在当前会话中"
-                )
-
-                if st.button(f"清除{model.display_name}的API密钥", key=f"clear_{model_id}"):
-                    del st.session_state.api_keys[model_id]
-                    st.rerun()
-            else:
-                api_key = st.text_input(
-                    "API密钥",
-                    type="password",
-                    key=f"api_key_input_{model_id}",
-                    help=f"请输入 {model.provider.value.upper()} 的API密钥"
-                )
-
-                # 保存到会话状态
-                if api_key and st.button(f"保存{model.display_name}的API密钥", key=f"save_{model_id}"):
-                    st.session_state.api_keys[model_id] = api_key
-                    st.success("API密钥已保存到当前会话")
-                    st.rerun()
-
-        return api_key
-
-    def _validate_model_config(self, model_id: str, api_key: str):
-        """验证模型配置"""
-        if not api_key:
-            st.error("❌ 请配置API密钥")
-            st.session_state.model_config_validated = False
-            return
-
-        # 测试API连接
-        if st.button("🧪 测试API连接", key=f"test_{model_id}"):
-            with st.spinner("正在测试API连接..."):
-                try:
-                    from core.multi_llm import multi_llm_manager
-
-                    # 使用简单的测试提示
-                    test_prompt = "请回复'连接成功'，不要其他内容。"
-                    response = multi_llm_manager.generate_with_retry(
-                        model_id, api_key, test_prompt, max_retries=1
-                    )
-
-                    if "连接成功" in response or "success" in response.lower():
-                        st.success("✅ API连接测试成功！")
-                        st.session_state.model_config_validated = True
-                    else:
-                        st.warning(f"⚠️ API连接成功，但响应异常: {response[:100]}...")
-                        st.session_state.model_config_validated = True
-
-                except Exception as e:
-                    st.error(f"❌ API连接测试失败: {str(e)}")
-                    st.session_state.model_config_validated = False
 
     def render_quick_setup(self) -> bool:
         """
@@ -393,38 +302,22 @@ class ModelSelectorComponent:
         # API密钥输入和测试
         success = False
 
-        # 分析模型API密钥
-        analysis_env_key = analysis_model_obj.get_env_key() if analysis_model_obj else ""
-        analysis_env_api_key = os.getenv(analysis_env_key) if analysis_env_key else ""
-
         st.write("**任务分析模型API密钥**")
-        if analysis_env_api_key:
-            st.success(f"✅ 已检测到环境变量 `{analysis_env_key}` 中的API密钥")
-            analysis_api_key = analysis_env_api_key
-        else:
-            analysis_api_key = st.text_input(
-                "分析模型API密钥",
-                type="password",
-                key="quick_analysis_api_key",
-                help=f"请输入分析模型的API密钥"
-            )
-
-        # 生成模型API密钥
-        generation_env_key = generation_model_obj.get_env_key() if generation_model_obj else ""
-        generation_env_api_key = os.getenv(generation_env_key) if generation_env_key else ""
+        analysis_api_key = st.text_input(
+            "分析模型API密钥",
+            type="password",
+            key="quick_analysis_api_key",
+            help=f"请输入分析模型的API密钥"
+        )
 
         if not use_same_model:
             st.write("**代码生成模型API密钥**")
-            if generation_env_api_key:
-                st.success(f"✅ 已检测到环境变量 `{generation_env_key}` 中的API密钥")
-                generation_api_key = generation_env_api_key
-            else:
-                generation_api_key = st.text_input(
-                    "生成模型API密钥",
-                    type="password",
-                    key="quick_generation_api_key",
-                    help=f"请输入生成模型的API密钥"
-                )
+            generation_api_key = st.text_input(
+                "生成模型API密钥",
+                type="password",
+                key="quick_generation_api_key",
+                help=f"请输入生成模型的API密钥"
+            )
         else:
             generation_api_key = analysis_api_key
 
@@ -471,13 +364,12 @@ class ModelSelectorComponent:
                     if analysis_success and generation_success:
                         # 保存分析模型配置
                         st.session_state.analysis_model = analysis_model
-                        if not analysis_env_api_key:
-                            st.session_state.api_keys[f"analysis_{analysis_model}"] = analysis_api_key
+                        st.session_state.api_keys[f"analysis_{analysis_model}"] = analysis_api_key
                         st.session_state.analysis_model_validated = True
 
                         # 保存生成模型配置
                         st.session_state.generation_model = generation_model
-                        if not use_same_model and not generation_env_api_key:
+                        if not use_same_model:
                             st.session_state.api_keys[f"generation_{generation_model}"] = generation_api_key
                         st.session_state.generation_model_validated = True
 
@@ -618,17 +510,7 @@ class ModelSelectorComponent:
         return model_id, api_key
 
     def _get_api_key_for_model(self, model_id: str, config_type: str) -> str:
-        """获取指定模型的API密钥"""
-        model = model_config.get_model_by_id(model_id)
-        if not model:
-            return ""
-
-        # 优先从环境变量获取
-        env_key = model.get_env_key()
-        env_api_key = os.getenv(env_key)
-        if env_api_key:
-            return env_api_key
-
+        """获取指定模型的API密钥 - 完全从session state获取"""
         # 从会话状态获取
         session_key = f"{config_type}_{model_id}"
         return st.session_state.api_keys.get(session_key, "")
