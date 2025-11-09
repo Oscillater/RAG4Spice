@@ -9,7 +9,6 @@ import time
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 
-from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -17,6 +16,7 @@ from langchain_core.documents import Document
 
 from config.settings import settings
 from utils.validators import FileValidator, ValidationError
+from utils.pdf_parser import extract_text_from_pdf
 
 
 class DatabaseManager:
@@ -62,12 +62,33 @@ class DatabaseManager:
             print(f"开始加载PDF文档: {pdf_path}")
             start_time = time.time()
 
-            # 加载PDF
-            loader = PyPDFLoader(str(pdf_path))
-            documents = loader.load()
+            # 使用统一的PDF解析器提取文本
+            text_content = extract_text_from_pdf(file_path=str(pdf_path))
+
+            if not text_content or not text_content.strip():
+                raise RuntimeError("无法从PDF文件中提取任何文本内容")
+
+            # 将文本内容转换为Document对象
+            # 按页面分割文本
+            pages = text_content.split("--- 第")
+            documents = []
+
+            for i, page_text in enumerate(pages):
+                if i == 0:  # 第一个分割可能是空的或不是页面内容
+                    continue
+
+                # 重新构建页面文本格式
+                page_content = "--- 第" + page_text
+                if page_content.strip():
+                    # 创建Document对象，使用页面标识作为metadata
+                    page_num = i
+                    documents.append(Document(
+                        page_content=page_content.strip(),
+                        metadata={"source": str(pdf_path), "page": page_num}
+                    ))
 
             if not documents:
-                raise RuntimeError("无法从PDF文件中加载任何内容")
+                raise RuntimeError("无法从PDF文件中创建任何文档对象")
 
             load_time = time.time() - start_time
             print(f"成功加载 {len(documents)} 页文档，耗时 {load_time:.2f} 秒")

@@ -83,7 +83,7 @@ class UnifiedLLMClient:
         data = {
             "model": self.model_id,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": kwargs.get('max_tokens', 4096),
+            "max_tokens": kwargs.get('max_tokens', 8192),  # 增加默认token限制
             "temperature": kwargs.get('temperature', 0.7)
         }
 
@@ -382,7 +382,8 @@ class MultiLLMManager:
             print("开始任务分析...")
             response_text = self.generate_with_retry(
                 model_id, api_key, task_analysis_prompt,
-                timeout=settings.TASK_ANALYSIS_TIMEOUT
+                timeout=settings.TASK_ANALYSIS_TIMEOUT,
+                max_tokens=8192  # 为任务分析专门设置更高的token限制
             )
 
             # 解析响应

@@ -21,25 +21,35 @@ except ImportError:
     PDFPLUMBER_AVAILABLE = False
 
 
-def extract_text_from_pdf(uploaded_file) -> str:
+def extract_text_from_pdf(uploaded_file=None, file_path: str = None) -> str:
     """
-    从上传的PDF文件中提取文本
+    从PDF文件中提取文本，支持上传的文件对象或文件路径
 
     Args:
-        uploaded_file: Streamlit上传的文件对象
+        uploaded_file: Streamlit上传的文件对象（可选）
+        file_path: PDF文件路径（可选）
 
     Returns:
         str: 提取的文本内容
 
     Raises:
         RuntimeError: PDF文本提取失败
+        ValueError: 参数错误
     """
-    if not uploaded_file:
-        raise ValueError("上传的PDF文件为空")
+    if not uploaded_file and not file_path:
+        raise ValueError("必须提供uploaded_file或file_path参数")
+
+    if uploaded_file and file_path:
+        raise ValueError("不能同时提供uploaded_file和file_path参数")
 
     try:
-        # 读取文件内容
-        pdf_bytes = uploaded_file.read()
+        # 从文件对象读取
+        if uploaded_file:
+            pdf_bytes = uploaded_file.read()
+        # 从文件路径读取
+        else:
+            with open(file_path, 'rb') as f:
+                pdf_bytes = f.read()
 
         # 尝试使用PyPDF2
         if PYPDF2_AVAILABLE:
